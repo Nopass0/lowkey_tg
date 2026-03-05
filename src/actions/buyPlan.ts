@@ -123,9 +123,18 @@ export async function handleBuyPlan(ctx: Context) {
       },
     });
 
-    // 4. Award 20% referral commission (same as backend)
+    // 4. Award dynamic referral commission
+    // 3. Award dynamic referral commission
+    // The `user` object is already available from the outer scope.
+    // We use `user.id` and `finalPrice` for the commission calculation.
     if (user.referredById) {
-      const commission = finalPrice * 0.2;
+      const referrer = await tx.user.findUnique({
+        where: { id: user.referredById },
+        select: { referralRate: true },
+      });
+      const rate = referrer?.referralRate ?? 0.2;
+      const commission = finalPrice * rate;
+
       await tx.user.update({
         where: { id: user.referredById },
         data: { referralBalance: { increment: commission } },

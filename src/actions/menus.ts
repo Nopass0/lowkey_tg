@@ -3,10 +3,15 @@ import { prisma } from "../utils/prisma";
 import { bot, getMainMenu } from "../utils/bot";
 import { PLANS, PERIOD_LABELS, PERIOD_DAYS } from "../utils/plans";
 
+const ADMIN_ID = process.env.TELEGRAM_ADMIN_CHAT_ID?.trim();
+
 export async function handleMenuMain(ctx: Context) {
   const telegramId = ctx.from?.id;
   let kb = getMainMenu().reply_markup.inline_keyboard;
-  if (telegramId && telegramId.toString() === process.env.ADMIN_TG_ID) {
+  const isAdmin =
+    telegramId &&
+    telegramId.toString() === process.env.TELEGRAM_ADMIN_CHAT_ID?.trim();
+  if (isAdmin) {
     kb = [...kb, [{ text: "🛠 Админ-панель", callback_data: "menu_admin" }]];
   }
 
@@ -37,8 +42,11 @@ export async function handleMenuProfile(ctx: Context) {
     }
   }
 
+  const isAdmin = telegramId.toString() === ADMIN_ID;
+  const adminBadge = isAdmin ? "\n⭐ **Администратор** 🛠\n" : "";
+
   const text =
-    `👤 **Ваш профиль**\n\n` +
+    `👤 **Ваш профиль**\n${adminBadge}\n` +
     `Логин: \`${user.login}\`\n` +
     `Баланс: **${user.balance} ₽**\n\n` +
     `Подписка: ${subText}`;
@@ -57,6 +65,11 @@ export async function handleMenuProfile(ctx: Context) {
     ]);
   }
 
+  if (isAdmin) {
+    kb.push([{ text: "🛠 Админ-панель", callback_data: "menu_admin" }]);
+  }
+
+  kb.push([{ text: "🚪 Выйти из аккаунта", callback_data: "logout" }]);
   kb.push([{ text: "◀️ Назад в меню", callback_data: "menu_main" }]);
 
   await ctx.editMessageText(text, {
@@ -88,6 +101,28 @@ export async function handleToggleAutoRenewal(ctx: Context) {
     `✅ Автопродление ${!user.subscription.autoRenewal ? "включено" : "выключено"}`,
   );
   return handleMenuProfile(ctx);
+}
+
+export async function handleLogout(ctx: Context) {
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await prisma.user.findUnique({
+    where: { telegramId: BigInt(telegramId) },
+  });
+
+  if (!user) return ctx.answerCbQuery("❌ Аккаунт не найден.");
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { telegramId: null },
+  });
+
+  await ctx.answerCbQuery("✅ Вы вышли из аккаунта.");
+  // We need to use ctx.reply instead of editMessage because the menu main will check telegramId and fail
+  return ctx.reply(
+    "Вы вышли из аккаунта. Пришлите логин для входа или регистрации.",
+  );
 }
 
 export async function handleMenuVpn(ctx: Context) {
@@ -286,9 +321,11 @@ export async function handleMenuReferral(ctx: Context) {
   const botInfo = await bot.telegram.getMe();
   const link = `https://t.me/${botInfo.username}?start=${user.referralCode}`;
 
+  const ratePct = (user.referralRate * 100).toFixed(0);
+
   await ctx.editMessageText(
     `🤝 **Партнерская программа**\n\n` +
-      `Приглашайте друзей и получайте 20% от всех их пополнений!\n\n` +
+      `Приглашайте друзей и получайте ${ratePct}% от всех их пополнений!\n\n` +
       `Ваш реферальный баланс: **${user.referralBalance} ₽**\n` +
       `Ваша персональная ссылка:\n\`${link}\``,
     {
@@ -339,84 +376,29 @@ export async function handleMenuWithdraw(ctx: Context) {
   if (!user) return;
 
   if (user.referralBalance < 2000) {
-    return ctx.answerCbQuery(
-      "❌ Минимальная сумма для вывода: 2000 ₽ (Ваш баланс меньше)",
-      { show_alert: true },
-    );
+    return ctx.answerCbQuery("❌ Минимальная сумма для вывода: 2000 ₽", {
+      show_alert: true,
+    });
   }
-
-  const request = await prisma.withdrawal.create({
-    data: {
-      userId: user.id,
-      amount: user.referralBalance,
-      target: "Бот (Ждет уточнения)",
-      bank: "СБП",
-      status: "pending",
-    },
-  });
 
   await prisma.user.update({
     where: { id: user.id },
-    data: { referralBalance: 0 },
+    data: { botState: "withdraw_1" },
   });
 
   await ctx.editMessageText(
-    `✅ **Заявка на вывод создана!**\n\n` +
-      `Сумма: **${request.amount} ₽**\n` +
-      `Номер заявки: \`${request.id}\`\n\n` +
-      `Пожалуйста, ожидайте. Мы свяжемся с вами для уточнения реквизитов.`,
+    `💸 **Вывод средств (${user.referralBalance} ₽)**\n\n` +
+      `Шаг 1/3: Введите номер вашей карты или телефона для перевода:`,
     {
-      parse_mode: "Markdown",
       reply_markup: {
         inline_keyboard: [
-          [{ text: "◀️ Назад в меню", callback_data: "menu_main" }],
+          [{ text: "❌ Отмена", callback_data: "menu_referral" }],
         ],
       },
     },
   );
-
-  if (process.env.ADMIN_TG_ID) {
-    bot.telegram
-      .sendMessage(
-        process.env.ADMIN_TG_ID,
-        `💸 **Новая заявка на вывод:**\nПользователь: ${user.login}\nСумма: ${request.amount} ₽\nID: ${request.id}`,
-        { parse_mode: "Markdown" },
-      )
-      .catch(() => {});
-  }
 }
 
-export async function handleMenuAdmin(ctx: Context) {
-  const telegramId = ctx.from?.id;
-  if (!telegramId || telegramId.toString() !== process.env.ADMIN_TG_ID) return;
+import { handleAdminMenu } from "./admin";
 
-  const usersCount = await prisma.user.count();
-  const ticketsCount = await prisma.supportTicket.count({
-    where: { status: "open" },
-  });
-  const withdrawalsCount = await prisma.withdrawal.count({
-    where: { status: "pending" },
-  });
-
-  const text =
-    `🛠 **Админ-панель**\n\n` +
-    `Всего пользователей: ${usersCount}\n` +
-    `Открытых тикетов: ${ticketsCount}\n` +
-    `Заявок на вывод: ${withdrawalsCount}\n\n` +
-    `*Для рассылки напишите:* \`/broadcast <текст>\`\n` +
-    `*Для ответа на тикет:* \`/reply <id> <текст>\`\n` +
-    `*Для вывода средств:* \`/approve <id>\` или \`/reject <id> <причина>\``;
-
-  try {
-    await ctx.editMessageText(text, {
-      parse_mode: "Markdown",
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "◀️ В главное меню", callback_data: "menu_main" }],
-        ],
-      },
-    });
-  } catch (err: any) {
-    if (!err.message?.includes("message is not modified")) throw err;
-  }
-}
+export { handleAdminMenu };

@@ -12,8 +12,8 @@ import {
   handleMenuSupport,
   handleMenuTopup,
   handleMenuTariffPeriods,
-  handleMenuAdmin,
   handleToggleAutoRenewal,
+  handleLogout,
 } from "./src/actions/menus";
 import {
   handleHowToConnect,
@@ -23,13 +23,32 @@ import {
   handleHowToWindows,
 } from "./src/actions/howToConnect";
 import { handleBuyPlan } from "./src/actions/buyPlan";
-import { getSbpClient, onPaymentSuccess } from "./src/utils/sbp";
+import {
+  getSbpClient,
+  onPaymentSuccess,
+  startPaymentWorker,
+} from "./src/utils/sbp";
 import { startSubscriptionWorker } from "./src/utils/subscriptionWorker";
+import {
+  handleAdminMenu,
+  handleAdminUsers,
+  handleAdminUserView,
+  handleAdminUserAction,
+  handleAdminPromos,
+  handleAdminPromoAction,
+  handleAdminTickets,
+  handleAdminTicketAction,
+  handleAdminWithdrawals,
+  handleAdminWithdrawalAction,
+  handleAdminBroadcast,
+} from "./src/actions/admin";
 
 // Validate envs
 if (!process.env.TELEGRAM_BOT_TOKEN) {
   throw new Error("TELEGRAM_BOT_TOKEN must be set in .env");
 }
+
+const ADMIN_ID = process.env.TELEGRAM_ADMIN_CHAT_ID?.trim();
 
 // Commands
 bot.command("start", handleStart);
@@ -43,136 +62,114 @@ bot.action("menu_promo", handleMenuPromo);
 bot.action("menu_referral", handleMenuReferral);
 bot.action("menu_support", handleMenuSupport);
 bot.action("menu_topup", handleMenuTopup);
-bot.action("menu_admin", handleMenuAdmin);
+bot.action("menu_admin", handleAdminMenu);
+
+bot.action(/^admin_users_(\d+)$/, handleAdminUsers);
+bot.action(/^admin_user_view_(.+)$/, handleAdminUserView);
+bot.action(/^admin_user_(.+)$/, handleAdminUserAction);
+bot.action(/^admin_add_sub_(.+)$/, handleAdminUserAction);
+
+bot.action("admin_promos", handleAdminPromos);
+bot.action(/^admin_promo_del_(.+)$/, handleAdminPromoAction);
+bot.action("admin_promo_create", handleAdminPromoAction);
+
+bot.action("admin_tickets", handleAdminTickets);
+bot.action(/^admin_ticket_view_(.+)$/, handleAdminTicketAction);
+
+bot.action("admin_withdrawals", handleAdminWithdrawals);
+bot.action(/^admin_wd_(approve|reject)_(.+)$/, handleAdminWithdrawalAction);
+
+bot.action("admin_broadcast", handleAdminBroadcast);
 
 bot.action("how_to_connect", handleHowToConnect);
 bot.action("how_to_android", handleHowToAndroid);
 bot.action("how_to_ios", handleHowToIos);
-bot.action("how_to_setup", handleHowToSetup);
 bot.action("how_to_windows", handleHowToWindows);
+
+bot.action("legal_offer", async (ctx) => {
+  const text =
+    `📜 **Публичная оферта**\n\n` +
+    `Настоящая публичная оферта является официальным предложением ИП Галин Богдан Маратович для заключения пользовательского соглашения.\n\n` +
+    `1. **Отказ от ответственности**: Сервис предоставляется "как есть". Исполнитель не несет ответственности за любые убытки или финансовые потери.\n\n` +
+    `2. **Претензии**: Пользователь отказывается от любых претензий, связанных с работой сервиса или блокировками.\n\n` +
+    `3. **Возврат средств**: Возврат денежных средств за оплаченные услуги **не предусмотрен ни при каких обстоятельствах.**\n\n` +
+    `4. **Обязательства**: Исполнитель не имеет обязательств по доступности сервиса и может ограничить доступ в любое время.`;
+  await ctx.reply(text, { parse_mode: "Markdown" });
+  return ctx.answerCbQuery();
+});
+
+bot.action("legal_privacy", async (ctx) => {
+  const text =
+    `🔒 **Политика конфиденциальности**\n\n` +
+    `Мы собираем информацию о вашей активности для обеспечения работы сервиса.\n\n` +
+    `1. **Сбор данных**: Включает технические характеристики, IP-адреса и логи соединений.\n\n` +
+    `2. **Хранение**: Мы оставляем за собой право хранить данные без ограничения по времени.\n\n` +
+    `3. **Передача третьим лицам**: Пользователь соглашается с тем, что Исполнитель имеет неограниченное право передавать и продавать собранную информацию любым третьим лицам по собственному усмотрению.`;
+  await ctx.reply(text, { parse_mode: "Markdown" });
+  return ctx.answerCbQuery();
+});
+
+bot.action(/^legal_accept_all:(.+)$/, async (ctx) => {
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const userId = ctx.match[1];
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) return ctx.answerCbQuery("❌ Ошибка: пользователь не найден.");
+
+  if (user.telegramId && user.telegramId !== BigInt(telegramId)) {
+    return ctx.answerCbQuery(
+      "❌ Этот аккаунт уже привязан к другому Telegram.",
+    );
+  }
+
+  await prisma.user.update({
+    where: { id: userId },
+    data: { telegramId: BigInt(telegramId), telegramLinkCode: null },
+  });
+
+  await ctx.answerCbQuery("✅ Вы успешно привязали аккаунт!");
+  await ctx.editMessageText(
+    `🎉 Поздравляем, **${user.login}**! Ваш аккаунт успешно привязан.`,
+    { parse_mode: "Markdown" },
+  );
+  return handleMenuMain(ctx);
+});
+
 bot.action("toggle_auto_renewal", handleToggleAutoRenewal);
+bot.action("logout", handleLogout);
 
 bot.action(/^plan_view_(.+)$/, handleMenuTariffPeriods);
-bot.action(/^buy_(.+?)_(.+)$/, handleBuyPlan);
+bot.action(/^buy_(.+)_(.+)$/, handleBuyPlan);
 
-bot.action(/^check_payment_(.+)$/, async (ctx) => {
-  // @ts-ignore
-  const paymentId = ctx.match[1];
-  if (!paymentId) return;
+bot.action("menu_withdraw", async (ctx) => {
+  const { handleMenuWithdraw } = await import("./src/actions/menus");
+  return handleMenuWithdraw(ctx);
+});
 
-  try {
-    const payment = await prisma.payment.findUnique({
-      where: { id: paymentId },
-    });
-    if (!payment)
-      return ctx.answerCbQuery("❌ Платеж не найден.", { show_alert: true });
+// Text Handling
+bot.on("text", handleTextMessage);
 
-    if (payment.status === "success") {
-      return ctx.answerCbQuery(`✅ Этот платеж уже успешно оплачен!`, {
-        show_alert: true,
-      });
-    }
-
-    if (new Date() > payment.expiresAt) {
-      await prisma.payment.update({
-        where: { id: payment.id },
-        data: { status: "expired" },
-      });
-      return ctx.answerCbQuery("❌ Время на оплату вышло.", {
-        show_alert: true,
-      });
-    }
-
-    // Check with API
-    const sbp = getSbpClient();
-    const [statusData] = await sbp.getPaymentStatus(payment.sbpPaymentId);
-
-    if (statusData) {
-      const sbpStatus =
-        (statusData as any).status || (statusData as any).operationStatus;
-
-      if (
-        sbpStatus === "ACWP" ||
-        sbpStatus === "ACSC" ||
-        sbpStatus === "Accepted"
-      ) {
-        await prisma.payment.update({
-          where: { id: payment.id },
-          data: { status: "success" },
-        });
-        await onPaymentSuccess(payment.userId, payment.amount);
-
-        await ctx.answerCbQuery(
-          `✅ Оплата на ${payment.amount} ₽ успешно зачислена!`,
-          { show_alert: true },
-        );
-
-        // Return to main menu
-        if (ctx.callbackQuery.message) {
-          await ctx.editMessageText(
-            `✅ Баланс успешно пополнен на **${payment.amount} ₽**.\n\nСпасибо за оплату!`,
-            {
-              parse_mode: "Markdown",
-              reply_markup: {
-                inline_keyboard: [
-                  [{ text: "◀️ В главное меню", callback_data: "menu_main" }],
-                ],
-              },
-            },
-          );
-        }
-        return;
-      } else if (
-        sbpStatus === "RJCT" ||
-        sbpStatus === "CANC" ||
-        sbpStatus === "Rejected"
-      ) {
-        await prisma.payment.update({
-          where: { id: payment.id },
-          data: { status: "failed" },
-        });
-        return ctx.answerCbQuery("❌ Платеж отклонен банком.", {
-          show_alert: true,
-        });
-      }
-    }
-
-    await ctx.answerCbQuery(
-      "⏳ Ваша оплата еще обрабатывается банком. Пожалуйста, подождите немного и нажмите кнопку проверки снова.",
-      { show_alert: true },
+// SBP Polling
+onPaymentSuccess(async (payment) => {
+  const user = await prisma.user.findUnique({ where: { id: payment.userId } });
+  if (user && user.telegramId) {
+    bot.telegram.sendMessage(
+      Number(user.telegramId),
+      `✅ Баланс успешно пополнен на ${payment.amount} ₽!`,
     );
-  } catch (err) {
-    console.error("[Bot] Check payment error:", err);
-    await ctx.answerCbQuery("❌ Ошибка при проверке статуса.", {
-      show_alert: true,
-    });
   }
 });
 
-// Temp stub for all other queries
-bot.on("callback_query", (ctx, next) => {
-  // Try to match other actions if needed, or pass
-  return next();
-});
-
-// Text handling for user linking, topups, support & promo
-bot.on("text", handleTextMessage);
+// Start workers
+startSubscriptionWorker();
+startPaymentWorker();
 
 // Launch
-bot
-  .launch()
-  .then(() => {
-    console.log("🤖 Lowkey VPN Bot is running!");
-    startSubscriptionWorker();
-  })
-  .catch((err) => console.error("Failed to start bot:", err));
+bot.launch().then(() => {
+  console.log("Bot started!");
+});
 
-// Graceful stop
-process.once("SIGINT", async () => {
-  bot.stop("SIGINT");
-  await prisma.$disconnect();
-});
-process.once("SIGTERM", async () => {
-  bot.stop("SIGTERM");
-  await prisma.$disconnect();
-});
+// Enable graceful stop
+process.once("SIGINT", () => bot.stop("SIGINT"));
+process.once("SIGTERM", () => bot.stop("SIGTERM"));

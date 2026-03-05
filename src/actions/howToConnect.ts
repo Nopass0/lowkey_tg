@@ -26,8 +26,9 @@ export async function handleHowToConnect(ctx: Context) {
 export async function handleHowToAndroid(ctx: Context) {
   const text =
     `🤖 **Инструкция для Android**\n\n` +
-    `1. Скачайте приложение **v2rayNG** из Google Play:\n` +
-    `[Скачать v2rayNG](https://play.google.com/store/apps/details?id=com.v2ray.ang)\n\n` +
+    `1. Скачайте приложение **v2rayNG**:\n` +
+    `• [Google Play](https://play.google.com/store/apps/details?id=com.v2ray.ang)\n` +
+    `• [GitHub (Последний APK)](https://github.com/2dust/v2rayNG/releases/latest)\n\n` +
     `2. Перейдите к следующему шагу, чтобы узнать как добавить вашу ссылку.`;
 
   const buttons = [
@@ -37,15 +38,16 @@ export async function handleHowToAndroid(ctx: Context) {
 
   await ctx.editMessageText(text, {
     parse_mode: "Markdown",
+    link_preview_options: { is_disabled: true },
     reply_markup: { inline_keyboard: buttons },
   });
 }
 
 export async function handleHowToIos(ctx: Context) {
   const text =
-    `🍎 **Инструкция для iOS**\n\n` +
-    `1. Скачайте приложение **v2rayV** (или Shadowrocket / FoXray) из App Store:\n` +
-    `[Скачать v2rayV](https://apps.apple.com/app/v2rayv/id6450512534)\n\n` +
+    `🍎 **Инструкция для iOS (iPhone/iPad)**\n\n` +
+    `1. Установите приложение **V2Box** из App Store:\n` +
+    `• [Установить V2Box](https://apps.apple.com/app/v2box-v2ray-client/id1640135560)\n\n` +
     `2. Перейдите к следующему шагу для настройки.`;
 
   const buttons = [
@@ -55,6 +57,7 @@ export async function handleHowToIos(ctx: Context) {
 
   await ctx.editMessageText(text, {
     parse_mode: "Markdown",
+    link_preview_options: { is_disabled: true },
     reply_markup: { inline_keyboard: buttons },
   });
 }

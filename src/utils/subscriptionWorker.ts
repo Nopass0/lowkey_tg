@@ -11,66 +11,77 @@ export async function startSubscriptionWorker() {
 }
 
 async function checkSubscriptions() {
-  console.log("🔍 Checking subscriptions for notifications and renewals...");
-  const now = new Date();
+  try {
+    console.log("🔍 Checking subscriptions for notifications and renewals...");
+    const now = new Date();
 
-  const sevenDaysAway = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-  const threeDaysAway = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
-  const oneDayAway = new Date(now.getTime() + 1 * 24 * 60 * 60 * 1000);
+    const sevenDaysAway = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const threeDaysAway = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+    const oneDayAway = new Date(now.getTime() + 1 * 24 * 60 * 60 * 1000);
 
-  // We find active subscriptions that are about to expire
-  const subs = await prisma.subscription.findMany({
-    where: {
-      isLifetime: false,
-      activeUntil: { gt: now, lt: sevenDaysAway },
-    },
-    include: { user: true },
-  });
+    // We find active subscriptions that are about to expire
+    const subs = await prisma.subscription.findMany({
+      where: {
+        isLifetime: false,
+        activeUntil: { gt: now, lt: sevenDaysAway },
+      },
+      include: { user: true },
+    });
 
-  for (const sub of subs) {
-    if (!sub.user.telegramId) continue;
+    for (const sub of subs) {
+      if (!sub.user.telegramId) continue;
 
-    const diffHours =
-      (sub.activeUntil.getTime() - now.getTime()) / (1000 * 60 * 60);
-    const diffDays = Math.ceil(diffHours / 24);
+      const diffHours =
+        (sub.activeUntil.getTime() - now.getTime()) / (1000 * 60 * 60);
+      const diffDays = Math.ceil(diffHours / 24);
 
-    let message = "";
-    if (diffDays === 7)
-      message = "🗓 **До конца вашей подписки осталось 7 дней.**";
-    else if (diffDays === 3)
-      message = "🗓 **До конца вашей подписки осталось 3 дня.**";
-    else if (diffDays === 1) message = "⚠️ **Ваша подписка истекает завтра!**";
+      let message = "";
+      if (diffDays === 7)
+        message = "🗓 **До конца вашей подписки осталось 7 дней.**";
+      else if (diffDays === 3)
+        message = "🗓 **До конца вашей подписки осталось 3 дня.**";
+      else if (diffDays === 1)
+        message = "⚠️ **Ваша подписка истекает завтра!**";
 
-    if (message) {
-      const renewalMethod = sub.autoRenewal
-        ? "\n\n🔄 У вас включено автопродление. Убедитесь, что на балансе достаточно средств."
-        : "\n\n❌ Автопродление выключено. Продлите подписку в меню профиля.";
+      if (message) {
+        const renewalMethod = sub.autoRenewal
+          ? "\n\n🔄 У вас включено автопродление. Убедитесь, что на балансе достаточно средств."
+          : "\n\n❌ Автопродление выключено. Продлите подписку в меню профиля.";
 
-      try {
-        await bot.telegram.sendMessage(
-          sub.user.telegramId.toString(),
-          message + renewalMethod,
-          {
-            parse_mode: "Markdown",
-          },
-        );
-      } catch (e) {}
+        try {
+          await bot.telegram.sendMessage(
+            sub.user.telegramId.toString(),
+            message + renewalMethod,
+            {
+              parse_mode: "Markdown",
+            },
+          );
+        } catch (e) {}
+      }
     }
-  }
 
-  // Handle actual expiration (Auto-renewal)
-  const expiringNow = await prisma.subscription.findMany({
-    where: {
-      isLifetime: false,
-      activeUntil: { lte: now },
-      autoRenewal: true,
-    },
-    include: { user: true },
-  });
+    // Handle actual expiration (Auto-renewal)
+    const expiringNow = await prisma.subscription.findMany({
+      where: {
+        isLifetime: false,
+        activeUntil: { lte: now },
+        autoRenewal: true,
+      },
+      include: { user: true },
+    });
 
-  for (const sub of expiringNow) {
-    // Attempt renewal
-    await attemptAutoRenewal(sub);
+    for (const sub of expiringNow) {
+      // Attempt renewal
+      await attemptAutoRenewal(sub);
+    }
+  } catch (err: any) {
+    if (err.code === "P1017" || err.message?.includes("connection")) {
+      console.log(
+        "🕒 Subscription Worker: Database connection lost, retrying in next cycle...",
+      );
+    } else {
+      console.error("🕒 Subscription Worker error:", err);
+    }
   }
 }
 
