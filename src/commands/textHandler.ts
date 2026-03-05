@@ -4,6 +4,7 @@ import { getMainMenu, bot } from "../utils/bot";
 import crypto from "crypto";
 import { hash } from "bcryptjs";
 import { getSbpClient } from "../utils/sbp";
+import { handleCreateReferralPromo } from "../actions/adminPromo";
 
 function generateReferralCode(login: string): string {
   const prefix = login.toUpperCase().slice(0, 8);
@@ -144,6 +145,14 @@ export async function handleTextMessage(
     return ctx.reply(
       `✅ Рассылка завершена. Отправлено ${count} пользователям.`,
     );
+  }
+
+  // Admin Create Referral Promo
+  if (
+    text.startsWith("/create_promo ") &&
+    telegramId.toString() === process.env.ADMIN_TG_ID
+  ) {
+    return handleCreateReferralPromo(ctx);
   }
 
   // Admin Reply Ticket
@@ -325,6 +334,13 @@ export async function handleTextMessage(
             data: { pendingDiscountFixed: fixed },
           });
           replyMsg += `• Ваша скидка на следующую подписку составит ${fixed} ₽\n`;
+        } else if (eff.key === "set_referral_rate") {
+          const rate = Number(eff.value);
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { referralRate: rate },
+          });
+          replyMsg += `• Ваш реферальный процент теперь составляет **${rate * 100}%**! 🤝\n`;
         }
       }
 
