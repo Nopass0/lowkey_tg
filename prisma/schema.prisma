@@ -1,0 +1,344 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// USERS
+// ─────────────────────────────────────────────
+
+model User {
+  id           String @id @default(uuid())
+  login        String @unique
+  passwordHash String
+
+  balance              Float @default(0) // основной баланс (₽)
+  referralBalance      Float @default(0) // реферальный баланс (₽)
+  referralRate         Float @default(0.2) // 20% по умолчанию
+  pendingDiscountPct   Float @default(0) // скидка % по промокоду (применяется при след. покупке)
+  pendingDiscountFixed Float @default(0) // фиксированная скидка ₽ по промокоду
+
+  isBanned Boolean @default(false)
+  isAdmin  Boolean @default(false)
+
+  // Telegram Bot integration
+  telegramId            BigInt?   @unique
+  botLoginCode          String?
+  botLoginCodeExpiresAt DateTime?
+  telegramLinkCode          String?   @unique
+  telegramLinkCodeExpiresAt DateTime?
+
+  referralCode String  @unique // уникальный реф-код пользователя
+  referredById String? // кто пригласил
+  referredBy   User?   @relation("Referrals", fields: [referredById], references: [id])
+  referrals    User[]  @relation("Referrals")
+
+  joinedAt DateTime @default(now())
+
+  // Relations
+  subscription     Subscription?
+  devices          Device[]
+  transactions     Transaction[]
+  promoActivations PromoActivation[]
+  withdrawals      Withdrawal[]
+  payments         Payment[]
+  vpnTokens        VpnToken[]
+  supportTickets   SupportTicket[]
+
+  @@map("users")
+}
+
+// ─────────────────────────────────────────────
+// SUBSCRIPTIONS & TARIFFS
+// ─────────────────────────────────────────────
+
+model Tariff {
+  id           String @id @default(uuid())
+  name         String // "Starter"
+  description  String // "1 Месяц"
+  price        Float  // 150
+  durationDays Int    // 30
+  isActive     Boolean @default(true)
+
+  createdAt    DateTime @default(now())
+
+  @@map("tariffs")
+}
+
+model Subscription {
+  id     String @id @default(uuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  planId   String // References Tariff.id typically, or legacy "starter"
+  planName String // display name
+
+  activeUntil DateTime
+  isLifetime  Boolean  @default(false)
+  autoRenewal Boolean  @default(true) // Auto-renew if balance is enough
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("subscriptions")
+}
+
+// ─────────────────────────────────────────────
+// TRANSACTIONS
+// ─────────────────────────────────────────────
+
+// type values:
+//   "topup"             — пополнение баланса через СБП
+//   "subscription"      — покупка подписки
+//   "referral_earning"  — реферальное начисление (20% с пополнения реферала)
+//   "withdrawal"        — вывод реферального баланса (отрицательная сумма)
+
+model Transaction {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type   String // см. type values выше
+  amount Float // положительное = приход, отрицательное = расход
+  title  String // человекочитаемое, например: "Пополнение через СБП"
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("transactions")
+}
+
+// ─────────────────────────────────────────────
+// PAYMENTS (СБП QR)
+// ─────────────────────────────────────────────
+
+// status values: "pending" | "success" | "failed" | "expired"
+
+model Payment {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  sbpPaymentId String @unique // ID из tochka-sbp
+  amount       Float // сумма в ₽
+
+  status String @default("pending")
+
+  qrUrl  String // URL изображения QR-кода
+  sbpUrl String // deep-link sbp://...
+
+  createdAt DateTime @default(now())
+  expiresAt DateTime // обычно now() + 30 минут
+
+  @@index([userId])
+  @@map("payments")
+}
+
+// ─────────────────────────────────────────────
+// DEVICES
+// ─────────────────────────────────────────────
+
+// Онлайн-статус и скорость хранятся в Redis (не в Postgres),
+// так как обновляются каждые несколько секунд.
+
+model Device {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name    String // например: "iPhone 15 Pro"
+  os      String // "iOS" | "Android" | "Windows" | "macOS" | "Linux"
+  version String // версия ОС
+  lastIp  String
+
+  isBlocked  Boolean  @default(false)
+  lastSeenAt DateTime @default(now())
+
+  vpnTokens VpnToken[]
+
+  @@index([userId])
+  @@map("devices")
+}
+
+// ─────────────────────────────────────────────
+// PROMO CODES
+// ─────────────────────────────────────────────
+
+// conditions и effects хранятся как JSON-массивы.
+//
+// Примеры conditions:
+//   [{ key: "new_users_only" }]
+//   [{ key: "date_range", value: "2026-02-01", value2: "2026-04-30" }]
+//   [{ key: "max_activations", value: "500" }]
+//   [{ key: "no_active_sub" }]
+//
+// Примеры effects:
+//   [{ key: "add_balance", value: "100" }]
+//   [{ key: "plan_discount_pct", value: "20" }]
+//   [{ key: "free_days", value: "7" }]
+//   [{ key: "upgrade_plan", value: "pro" }]
+
+model PromoCode {
+  id   String @id @default(uuid())
+  code String @unique // регистронезависимый
+
+  conditions Json // PromoCondition[]
+  effects    Json // PromoEffect[]
+
+  maxActivations Int? // null = без ограничений
+
+  createdAt DateTime @default(now())
+
+  // Relations
+  activations PromoActivation[]
+
+  @@map("promo_codes")
+}
+
+model PromoActivation {
+  id          String @id @default(uuid())
+  userId      String
+  promoCodeId String
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  promoCode PromoCode @relation(fields: [promoCodeId], references: [id], onDelete: Cascade)
+
+  activatedAt DateTime @default(now())
+
+  @@unique([userId, promoCodeId]) // один пользователь — один раз
+  @@map("promo_activations")
+}
+
+// ─────────────────────────────────────────────
+// REFERRAL WITHDRAWALS
+// ─────────────────────────────────────────────
+
+// status values: "pending" | "approved" | "rejected"
+//
+// Флоу:
+//   1. Пользователь создаёт заявку → referralBalance -= amount (резервируется)
+//   2. Админ одобряет  → status: "approved", processedAt = now()
+//   3. Админ отклоняет → status: "rejected", processedAt = now(), referralBalance += amount (возврат)
+
+model Withdrawal {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  amount Float // сумма в ₽
+  target String // номер карты или телефона
+  bank   String // название банка
+
+  status String @default("pending")
+
+  createdAt   DateTime  @default(now())
+  processedAt DateTime? // когда admin обработал
+
+  @@index([userId])
+  @@map("withdrawals")
+}
+
+// ─────────────────────────────────────────────
+// APP RELEASES
+// ─────────────────────────────────────────────
+
+// platform values: "android" | "windows"
+//
+// Важно: isLatest должен быть true только у ОДНОГО релиза на платформу.
+// При PATCH /admin/apps/releases/:id/set-latest → сбрасывать isLatest
+// у всех остальных релизов той же платформы.
+
+model AppRelease {
+  id String @id @default(uuid())
+
+  platform  String // "android" | "windows"
+  version   String // семантическая версия, например "1.4.2"
+  changelog String // список изменений
+
+  downloadUrl String // публичный URL для скачивания
+  fileSizeMb  Float
+
+  downloadCount Int     @default(0)
+  isLatest      Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@map("app_releases")
+}
+
+// ─────────────────────────────────────────────
+// SUPPORT TICKETS (TELEGRAM BOT)
+// ─────────────────────────────────────────────
+
+// status: "open" | "replied" | "closed"
+model SupportTicket {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  message String // Initial question / message
+  reply   String? // Admin reply
+  status  String  @default("open")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("support_tickets")
+}
+
+// ─────────────────────────────────────────────
+// VPN SERVERS
+// ─────────────────────────────────────────────
+
+// Represents a VPN node running Hysteria2 or VLESS / Xray
+model VpnServer {
+  id String @id @default(uuid())
+
+  ip                 String // public IP address
+  port               Int // usually 7000
+  supportedProtocols String[] // ["hysteria2", "vless"]
+  serverType         String // "dedicated" | "virtual"
+
+  // Custom server config or connection string template for third-party clients
+  connectLinkTemplate String? // e.g. "vless://{uuid}@{ip}:443?encryption=none..."
+
+  status      String @default("offline") // "online" | "offline"
+  currentLoad Int    @default(0) // number of active connected clients
+  location    String @default("Unknown, UN") // e.g. "Moscow, RU"
+
+  lastSeenAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  @@unique([ip, port])
+  @@map("vpn_servers")
+}
+
+// ─────────────────────────────────────────────
+// VPN TOKENS
+// ─────────────────────────────────────────────
+
+// Represents an active VPN session token for a device
+model VpnToken {
+  id String @id @default(uuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  deviceId String
+  device   Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  token String @unique // The actual secure token string
+
+  expiresAt DateTime // derived from subscription activeUntil
+  createdAt DateTime @default(now())
+
+  @@unique([userId, deviceId]) // One active token per user-device pair
+  @@map("vpn_tokens")
+}
