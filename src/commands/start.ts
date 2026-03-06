@@ -12,13 +12,23 @@ export async function handleStart(ctx: Context) {
 
   if (user) {
     let kb = getMainMenu().reply_markup.inline_keyboard;
-    if (telegramId.toString() === process.env.ADMIN_TG_ID) {
+    if (telegramId.toString() === process.env.TELEGRAM_ADMIN_CHAT_ID?.trim()) {
       kb = [...kb, [{ text: "🛠 Админ-панель", callback_data: "menu_admin" }]];
     }
-    return ctx.reply(
-      `Добро пожаловать, ${user.login}! 👋\nВаш VPN профиль активен. Выберите действие в меню:`,
-      { reply_markup: { inline_keyboard: kb } },
+
+    await ctx.reply(
+      `Добро пожаловать, ${user.login}! 👋\nВаш VPN профиль активен. Вы можете использовать кнопку внизу для вызова меню.`,
+      {
+        reply_markup: {
+          keyboard: [[{ text: "Меню" }]],
+          resize_keyboard: true,
+        },
+      },
     );
+
+    return ctx.reply("Выберите действие в меню:", {
+      reply_markup: { inline_keyboard: kb },
+    });
   } else {
     return ctx.reply(
       "Привет! Я бот Lowkey VPN. 🛡️\n\n" +

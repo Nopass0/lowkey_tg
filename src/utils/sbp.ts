@@ -104,19 +104,21 @@ export function startPaymentWorker() {
       const sbp = getSbpClient();
       for (const payment of pendingPayments) {
         try {
-          // In reality, Tochka SBP might have a specifically named method or you check via API
-          // For now, we assume a generic status check if the library supports it, or we mock the check.
-          // The user's code for 'sbp' needs to be used correctly.
-          // Note: The specific method 'checkPayment' or 'getInvoice' depends on the 'tochka-sbp' package version.
-          const status = await (sbp as any).getInvoiceStatus(payment.id);
+          // Status check using tochka-sbp
+          const statusData = await sbp.getPaymentStatus(payment.sbpPaymentId);
+          const firstStatus = Array.isArray(statusData)
+            ? statusData[0]
+            : statusData;
+          if (!firstStatus || !firstStatus.operationStatus) continue;
+          const status = firstStatus.operationStatus;
 
-          if (status === "paid" || status === "accepted") {
+          if (status === "ACWP" || status === "ACSC") {
             await prisma.payment.update({
               where: { id: payment.id },
               data: { status: "success" },
             });
             await processPaymentSuccess(payment.userId, payment.amount);
-          } else if (status === "rejected" || status === "expired") {
+          } else if (status === "RJCT" || status === "CANC") {
             await prisma.payment.update({
               where: { id: payment.id },
               data: { status: "failed" },

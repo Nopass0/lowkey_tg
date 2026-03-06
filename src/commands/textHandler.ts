@@ -330,7 +330,18 @@ export async function handleTextMessage(ctx: Context) {
   }
 
   // 3. Command & Numeric Parsing
-  if (text.startsWith("/broadcast ") && telegramId.toString() === ADMIN_ID) {
+  const safeAdminId = ADMIN_ID || "";
+  if (text.toLowerCase() === "меню") {
+    let kb = getMainMenu().reply_markup.inline_keyboard;
+    if (user && telegramId.toString() === safeAdminId) {
+      kb = [...kb, [{ text: "🛠 Админ-панель", callback_data: "menu_admin" }]];
+    }
+    return ctx.reply("Выберите действие в меню:", {
+      reply_markup: { inline_keyboard: kb },
+    });
+  }
+
+  if (text.startsWith("/broadcast ") && telegramId.toString() === safeAdminId) {
     const broadcastText = text.replace("/broadcast ", "");
     const users = await prisma.user.findMany({
       where: { telegramId: { not: null } },
@@ -349,7 +360,10 @@ export async function handleTextMessage(ctx: Context) {
     );
   }
 
-  if (text.startsWith("/create_promo ") && telegramId.toString() === ADMIN_ID) {
+  if (
+    text.startsWith("/create_promo ") &&
+    telegramId.toString() === safeAdminId
+  ) {
     const parts = text.split(" ");
     if (parts.length < 4)
       return ctx.reply("❌ Формат: `/create_promo <rate_0.XX> <CODE> <limit>`");
@@ -392,6 +406,7 @@ export async function handleTextMessage(ctx: Context) {
       return ctx.reply("❌ Лимит активаций исчерпан.");
 
     // Apply effects
+    let balanceAdded = 0;
     const effects = promo.effects as any[];
     for (const effect of effects) {
       if (effect.key === "set_referral_rate") {
@@ -400,13 +415,37 @@ export async function handleTextMessage(ctx: Context) {
           data: { referralRate: parseFloat(effect.value) },
         });
       }
+      if (effect.key === "add_balance") {
+        const amount = parseFloat(effect.value);
+        if (!isNaN(amount) && amount > 0) {
+          balanceAdded += amount;
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { balance: { increment: amount } },
+          });
+          await prisma.transaction.create({
+            data: {
+              userId: user.id,
+              type: "promo_activation",
+              amount: amount,
+              title: `Активация промокода ${code}`,
+            },
+          });
+        }
+      }
     }
 
     await prisma.promoActivation.create({
       data: { userId: user.id, promoCodeId: promo.id },
     });
 
-    return ctx.reply(`✅ Промокод **${code}** успешно активирован!`);
+    if (balanceAdded > 0) {
+      return ctx.reply(
+        `✅ Промокод **${code}** успешно активирован!\n\nНа ваш баланс начислено **${balanceAdded} ₽**.`,
+      );
+    } else {
+      return ctx.reply(`✅ Промокод **${code}** успешно активирован!`);
+    }
   }
 
   // Handle number input (Topup balance)
@@ -418,22 +457,23 @@ export async function handleTextMessage(ctx: Context) {
   ) {
     const sbp = getSbpClient();
     try {
-      const { sbp_link, bill_id } = await sbp.createInvoice({
-        amount: amountToTopup,
-        merchant_id: process.env.TOCHKA_MERCHANT_ID || "",
-        account_id: process.env.TOCHKA_ACCOUNT_ID || "",
-        callback_url: `${process.env.BACKEND_URL}/api/payments/callback`,
-        metadata: { userId: user.id },
+      const payment = await sbp.createSBP({
+        amount: amountToTopup * 100, // В копейках
+        merchantId: process.env.TOCHKA_MERCHANT_ID || "",
+        accountId: process.env.TOCHKA_ACCOUNT_ID || "",
+        description: `Пополнение баланса (User: ${user!.login})`,
+        qrcType: "DYNAMIC",
+        ttl: 30 * 60, // 30 минут
       });
 
       await prisma.payment.create({
         data: {
-          sbpPaymentId: bill_id,
-          userId: user.id,
+          sbpPaymentId: payment.qrcId,
+          userId: user!.id,
           amount: amountToTopup,
           status: "pending",
-          qrUrl: "", // Optional in schema but let's provide empty
-          sbpUrl: sbp_link,
+          qrUrl: payment.imageBase64 || "", // Сохраняем QR картинку если есть
+          sbpUrl: payment.payUrl,
           expiresAt: new Date(Date.now() + 30 * 60 * 1000), // 30 mins
         },
       });
@@ -443,7 +483,7 @@ export async function handleTextMessage(ctx: Context) {
         {
           reply_markup: {
             inline_keyboard: [
-              [{ text: "🔗 Оплатить через СБП", url: sbp_link }],
+              [{ text: "🔗 Оплатить через СБП", url: payment.payUrl }],
             ],
           },
           parse_mode: "Markdown",
