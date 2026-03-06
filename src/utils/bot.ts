@@ -3,6 +3,15 @@ import { prisma } from "../utils/prisma";
 
 export const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
 
+bot.catch((err: any, ctx) => {
+  const errorMessage = err?.message || err?.description || String(err);
+  if (errorMessage.includes("message is not modified")) {
+    // Ignore this common error when users click inline buttons multiple times
+    return;
+  }
+  console.error(`[Telegraf] Error for ${ctx.updateType}:`, err);
+});
+
 export function getMainMenu() {
   return Markup.inlineKeyboard([
     [Markup.button.callback("👤 Мой профиль", "menu_profile")],

@@ -43,6 +43,15 @@ import {
   handleAdminBroadcast,
 } from "./src/actions/admin";
 
+// Global error handlers to ensure bot doesn't crash
+process.on("uncaughtException", (err) => {
+  console.error("[Global] Uncaught Exception:", err);
+});
+
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("[Global] Unhandled Rejection at:", promise, "reason:", reason);
+});
+
 // Validate envs
 if (!process.env.TELEGRAM_BOT_TOKEN) {
   throw new Error("TELEGRAM_BOT_TOKEN must be set in .env");
