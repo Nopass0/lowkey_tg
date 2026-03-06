@@ -484,6 +484,12 @@ export async function handleTextMessage(ctx: Context) {
           reply_markup: {
             inline_keyboard: [
               [{ text: "🔗 Оплатить через СБП", url: payment.payUrl }],
+              [
+                {
+                  text: "🔄 Проверить оплату",
+                  callback_data: `check_payment_${payment.qrcId}`,
+                },
+              ],
             ],
           },
           parse_mode: "Markdown",

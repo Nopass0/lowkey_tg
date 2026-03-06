@@ -151,6 +151,80 @@ bot.action("logout", handleLogout);
 bot.action(/^plan_view_(.+)$/, handleMenuTariffPeriods);
 bot.action(/^buy_(.+)_(.+)$/, handleBuyPlan);
 
+bot.action(/^check_payment_(.+)$/, async (ctx) => {
+  const qrcId = ctx.match[1];
+  const payment = await prisma.payment.findFirst({
+    where: { sbpPaymentId: qrcId, status: "pending" },
+  });
+
+  if (!payment) {
+    return ctx.answerCbQuery("❌ Платеж не найден или уже обработан.", {
+      show_alert: true,
+    });
+  }
+
+  const sbp = getSbpClient();
+  try {
+    let statusData: any = await sbp.getPaymentStatus(qrcId || "");
+    let firstStatus = Array.isArray(statusData) ? statusData[0] : statusData;
+    if (firstStatus?.data && Array.isArray(firstStatus.data)) {
+      firstStatus = firstStatus.data[0];
+    }
+
+    if (!firstStatus || !firstStatus.operationStatus) {
+      return ctx.answerCbQuery(
+        "⏳ Платёж еще не прошел. Подождите пару минут.",
+        {
+          show_alert: true,
+        },
+      );
+    }
+
+    const status = firstStatus.operationStatus;
+
+    if (status === "ACWP" || status === "ACSC") {
+      await prisma.payment.update({
+        where: { id: payment.id },
+        data: { status: "success" },
+      });
+      // Import the success handler directly
+      const { processPaymentSuccess } = await import("./src/utils/sbp");
+      await processPaymentSuccess(payment.userId, payment.amount);
+
+      await ctx.editMessageText(
+        `✅ Платеж на **${payment.amount} ₽** успешно завершен!\nБаланс пополнен.`,
+        { parse_mode: "Markdown" },
+      );
+      return ctx.answerCbQuery("✅ Оплата прошла успешно!");
+    } else if (status === "RJCT" || status === "CANC") {
+      await prisma.payment.update({
+        where: { id: payment.id },
+        data: { status: "failed" },
+      });
+      await ctx.editMessageText(
+        `❌ Платеж на **${payment.amount} ₽** был отменен или отклонен.`,
+        { parse_mode: "Markdown" },
+      );
+      return ctx.answerCbQuery("❌ Оплата отклонена.");
+    }
+
+    return ctx.answerCbQuery(
+      "⏳ Оплата еще в процессе. Если вы уже оплатили, подождите еще пару минут.",
+      {
+        show_alert: true,
+      },
+    );
+  } catch (err) {
+    console.error("Manual check error:", err);
+    return ctx.answerCbQuery(
+      "❌ Ошибка при проверке статуса. Попробуйте позже.",
+      {
+        show_alert: true,
+      },
+    );
+  }
+});
+
 bot.action("menu_withdraw", async (ctx) => {
   const { handleMenuWithdraw } = await import("./src/actions/menus");
   return handleMenuWithdraw(ctx);

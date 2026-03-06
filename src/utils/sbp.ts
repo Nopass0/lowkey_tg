@@ -105,12 +105,34 @@ export function startPaymentWorker() {
       for (const payment of pendingPayments) {
         try {
           // Status check using tochka-sbp
-          const statusData = await sbp.getPaymentStatus(payment.sbpPaymentId);
-          const firstStatus = Array.isArray(statusData)
+          let statusData: any;
+          try {
+            statusData = await sbp.getPaymentStatus(payment.sbpPaymentId);
+          } catch (apiErr) {
+            console.error(
+              `Error checking SBP status for ${payment.sbpPaymentId}:`,
+              apiErr,
+            );
+            continue;
+          }
+
+          console.log(
+            `SBP Status checking for ${payment.sbpPaymentId}:`,
+            JSON.stringify(statusData, null, 2),
+          );
+
+          let firstStatus = Array.isArray(statusData)
             ? statusData[0]
             : statusData;
+
+          if (firstStatus?.data && Array.isArray(firstStatus.data)) {
+            firstStatus = firstStatus.data[0];
+          }
+
           if (!firstStatus || !firstStatus.operationStatus) continue;
           const status = firstStatus.operationStatus;
+
+          console.log(`Parsed SBP status:`, status);
 
           if (status === "ACWP" || status === "ACSC") {
             await prisma.payment.update({
@@ -125,7 +147,7 @@ export function startPaymentWorker() {
             });
           }
         } catch (err) {
-          // Skip for now, check next time
+          console.error("Error processing pending payment:", err);
         }
       }
 
