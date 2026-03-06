@@ -2,7 +2,7 @@ import { TochkaSBP } from "tochka-sbp";
 import { prisma } from "./prisma";
 
 let sbpClient: TochkaSBP | null = null;
-const listeners: ((data: { userId: string; amount: number }) => void)[] = [];
+const listeners: ((data: any) => void | Promise<void>)[] = [];
 
 export function getSbpClient(): TochkaSBP {
   if (!sbpClient) {
@@ -18,7 +18,7 @@ export function getSbpClient(): TochkaSBP {
  * Used in index.ts for bot notifications.
  */
 export function onPaymentSuccess(
-  callback: (data: { userId: string; amount: number }) => void,
+  callback: (data: any) => void | Promise<void>,
 ) {
   listeners.push(callback);
 }
@@ -82,20 +82,23 @@ export async function processPaymentSuccess(
     });
 
     // Notify listeners (e.g., to send a TG message)
-    // We add referrer info to the notification
     const referrer = await prisma.user.findFirst({
       where: { referrals: { some: { id: userId } } },
       select: { id: true, telegramId: true, referralRate: true },
     });
 
-    listeners.forEach((cb) =>
-      cb({
-        userId,
-        amount,
-        referrerId: referrer?.id,
-        commission: referrer ? amount * referrer.referralRate : 0,
-      }),
-    );
+    for (const cb of listeners) {
+      try {
+        await cb({
+          userId,
+          amount,
+          referrerId: referrer?.id,
+          commission: referrer ? amount * referrer.referralRate : 0,
+        });
+      } catch (e) {
+        console.error("Error in onPaymentSuccess listener:", e);
+      }
+    }
   } catch (error) {
     console.error("Error in processPaymentSuccess:", error);
   }

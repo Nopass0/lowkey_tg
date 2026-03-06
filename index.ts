@@ -254,47 +254,50 @@ bot.action("menu_withdraw", async (ctx) => {
 // Text Handling
 bot.on("text", handleTextMessage);
 
-// SBP Polling
-onPaymentSuccess(async (payment) => {
-  const user = await prisma.user.findUnique({ where: { id: payment.userId } });
-  if (user && user.telegramId) {
-    bot.telegram.sendMessage(
-      Number(user.telegramId),
-      `✅ Баланс успешно пополнен на ${payment.amount} ₽!`,
-    );
-  }
-});
-
-// Start workers
-startSubscriptionWorker();
-startPaymentWorker();
-
 // Polling notification listener
 onPaymentSuccess(async (data: any) => {
   const { userId, amount, referrerId, commission } = data;
 
-  // 1. Notify the user who paid
-  const user = await prisma.user.findUnique({ where: { id: userId } });
-  if (user && user.telegramId) {
-    bot.telegram.sendMessage(
-      Number(user.telegramId),
-      `✅ Ваша оплата на **${amount} ₽** получена! Баланс пополнен.`,
-      { parse_mode: "Markdown" },
-    );
-  }
-
-  // 2. Notify the referrer if applicable
-  if (referrerId && commission > 0) {
-    const referrer = await prisma.user.findUnique({
-      where: { id: referrerId },
-    });
-    if (referrer && referrer.telegramId) {
-      bot.telegram.sendMessage(
-        Number(referrer.telegramId),
-        `🤝 Вам начислено **${commission.toFixed(2)} ₽** реферальных за пополнение вашего партнера **${user?.login}**!`,
-        { parse_mode: "Markdown" },
-      );
+  try {
+    // 1. Notify the user who paid
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (user && user.telegramId) {
+      try {
+        await bot.telegram.sendMessage(
+          Number(user.telegramId),
+          `✅ Ваша оплата на **${amount} ₽** получена! Баланс пополнен.`,
+          { parse_mode: "Markdown" },
+        );
+      } catch (err) {
+        console.error(
+          `Failed to send payment notification to user ${userId}:`,
+          err,
+        );
+      }
     }
+
+    // 2. Notify the referrer if applicable
+    if (referrerId && commission > 0) {
+      const referrer = await prisma.user.findUnique({
+        where: { id: referrerId },
+      });
+      if (referrer && referrer.telegramId) {
+        try {
+          await bot.telegram.sendMessage(
+            Number(referrer.telegramId),
+            `🤝 Вам начислено **${commission.toFixed(2)} ₽** реферальных за пополнение вашего партнера **${user?.login}**!`,
+            { parse_mode: "Markdown" },
+          );
+        } catch (err) {
+          console.error(
+            `Failed to send referral notification to referrer ${referrerId}:`,
+            err,
+          );
+        }
+      }
+    }
+  } catch (err) {
+    console.error("General error in onPaymentSuccess handler:", err);
   }
 });
 
