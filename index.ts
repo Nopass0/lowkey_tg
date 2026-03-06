@@ -154,7 +154,10 @@ bot.action(/^buy_(.+)_(.+)$/, handleBuyPlan);
 bot.action(/^check_payment_(.+)$/, async (ctx) => {
   const qrcId = ctx.match[1];
   const payment = await prisma.payment.findFirst({
-    where: { sbpPaymentId: qrcId, status: "pending" },
+    where: {
+      sbpPaymentId: qrcId,
+      status: { in: ["pending", "expired", "failed"] },
+    },
   });
 
   if (!payment) {

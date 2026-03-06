@@ -156,12 +156,12 @@ export function startPaymentWorker() {
         }
       }
 
-      // 2. Cancel expired payments (older than 10 minutes)
-      const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
+      // 2. Cancel expired payments (older than 30 minutes)
+      const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
       await prisma.payment.updateMany({
         where: {
           status: "pending",
-          createdAt: { lt: tenMinutesAgo },
+          createdAt: { lt: thirtyMinutesAgo },
         },
         data: { status: "expired" },
       });
