@@ -227,6 +227,84 @@ export async function handleTextMessage(ctx: Context) {
       );
     }
 
+    // Admin: Find Referrer for Recovery Promo (from main menu)
+    if (
+      state === "admin_find_referrer_for_recovery" &&
+      telegramId.toString() === ADMIN_ID
+    ) {
+      const targetUser = await prisma.user.findFirst({
+        where: { login: { equals: text.trim(), mode: "insensitive" } },
+      });
+
+      if (!targetUser) {
+        return ctx.reply(`❌ Пользователь с логином "${text}" не найден.`);
+      }
+
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { botState: `admin_gen_recovery_custom:${targetUser.id}` },
+      });
+
+      return ctx.reply(
+        `👤 **Пригласитель найден: ${targetUser.login}**\n\n` +
+          `Теперь введите желаемое название для промокода (обязательно должно начинаться с \`RECOVERY_\`):`,
+        { parse_mode: "Markdown" },
+      );
+    }
+
+    // Admin: Generate Custom Recovery Promo
+    if (
+      state.startsWith("admin_gen_recovery_custom:") &&
+      telegramId.toString() === ADMIN_ID
+    ) {
+      const referrerId = state.split(":")[1];
+      const promoName = text.trim();
+
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { botState: null },
+      });
+
+      if (!promoName.toUpperCase().startsWith("RECOVERY_")) {
+        return ctx.reply(
+          "❌ Название промокода должно начинаться с `RECOVERY_` (например, `RECOVERY_IVAN`).",
+          { parse_mode: "Markdown" },
+        );
+      }
+
+      // Check if code exists
+      const existing = await prisma.promoCode.findUnique({
+        where: { code: promoName },
+      });
+      if (existing) return ctx.reply("❌ Такой промокод уже существует.");
+
+      const referrer = await prisma.user.findUnique({
+        where: { id: referrerId },
+      });
+      if (!referrer) return ctx.reply("❌ Пригласитель не найден.");
+
+      await prisma.promoCode.create({
+        data: {
+          code: promoName,
+          maxActivations: 1, // Single-use for one "lost" referral
+          conditions: [],
+          effects: [
+            { key: "referrer_id", value: referrerId },
+            { key: "add_balance", value: "100" },
+          ],
+        },
+      });
+
+      return ctx.reply(
+        `✅ **Recovery-промо создан!**\n\n` +
+          `Code: \`${promoName}\`\n` +
+          `При приглашении привяжет к: **${referrer.login}**\n` +
+          `Бонус: **100 ₽**\n\n` +
+          `Отправьте этот код рефералу.`,
+        { parse_mode: "Markdown" },
+      );
+    }
+
     // Admin: Edit Referral Balance
     if (
       state.startsWith("admin_edit_refbalance:") &&

@@ -34,7 +34,10 @@ export async function handleAdminMenu(ctx: Context) {
       Markup.button.callback("💬 Поддержка", "admin_tickets"),
       Markup.button.callback("💸 Выплаты", "admin_withdrawals"),
     ],
-    [Markup.button.callback("📢 Рассылка", "admin_broadcast")],
+    [
+      Markup.button.callback("📢 Рассылка", "admin_broadcast"),
+      Markup.button.callback("🎫 Recovery-промо", "admin_recovery_start"),
+    ],
     [Markup.button.callback("◀️ Главное меню", "menu_main")],
   ];
 
@@ -177,6 +180,17 @@ export async function handleAdminUserAction(ctx: Context) {
     return ctx.reply("🔍 Введите логин пользователя для поиска:");
   }
 
+  if (data === "admin_recovery_start") {
+    await prisma.user.update({
+      where: { telegramId: BigInt(telegramId) },
+      data: { botState: "admin_find_referrer_for_recovery" },
+    });
+    return ctx.reply(
+      "🎫 **Создание Recovery-промо**\n\nВведите **логин ПРИГЛАСИТЕЛЯ**, к которому нужно будет привязывать рефералов:",
+      { parse_mode: "Markdown" },
+    );
+  }
+
   if (data.startsWith("admin_user_balance_")) {
     const userId = data.split("_")[3];
     await prisma.user.update({
@@ -215,27 +229,15 @@ export async function handleAdminUserAction(ctx: Context) {
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user) return ctx.answerCbQuery("❌ Пользователь не найден.");
 
-    const code = `RECOVERY_${user.login.toUpperCase()}_${crypto
-      .randomBytes(3)
-      .toString("hex")
-      .toUpperCase()}`;
-    await prisma.promoCode.create({
-      data: {
-        code,
-        maxActivations: 1,
-        conditions: [],
-        effects: [
-          { key: "referrer_id", value: user.id },
-          { key: "add_balance", value: "100" },
-        ],
-      },
+    await prisma.user.update({
+      where: { telegramId: BigInt(telegramId) },
+      data: { botState: `admin_gen_recovery_custom:${userId}` },
     });
 
     return ctx.reply(
-      `✅ **Промокод создан!**\n\n` +
-        `Передайте этот код пользователю, который должен быть привязан к **${user.login}**:\n\n` +
-        `Code: \`${code}\`\n\n` +
-        `🎁 Бонус при активации: **100 ₽**`,
+      `🎫 **Создание Recovery-промо**\n\n` +
+        `Вы создаете промокод, который привяжет активировавшего его пользователя к **${user.login}**.\n\n` +
+        `Введите желаемое название для промокода (обязательно должно начинаться с \`RECOVERY_\`):`,
       { parse_mode: "Markdown" },
     );
   }
