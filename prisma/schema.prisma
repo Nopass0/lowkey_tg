@@ -36,6 +36,7 @@ model User {
 
   botState            String?   // For managing interactive flows (e.g., "admin_search_user", "withdraw_step_1")
 
+  tempReferrerId String? // temporary storage for referral link between /start and link
   referralCode String  @unique // уникальный реф-код пользователя
   referredById String? // кто пригласил
   referredBy   User?   @relation("Referrals", fields: [referredById], references: [id])

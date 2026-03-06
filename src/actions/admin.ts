@@ -2,6 +2,7 @@ import type { User } from "@prisma/client";
 import { Context, Markup } from "telegraf";
 import { prisma } from "../utils/prisma";
 import { PLANS } from "../utils/plans";
+import crypto from "crypto";
 
 const ADMIN_ID = process.env.TELEGRAM_ADMIN_CHAT_ID?.trim();
 
@@ -133,14 +134,24 @@ export async function handleAdminUserView(ctx: Context) {
         `admin_user_balance_${user.id}`,
       ),
       Markup.button.callback(
-        "⏳ Добавить подписку",
-        `admin_user_sub_${user.id}`,
+        "🤝 Реф. баланс",
+        `admin_user_refbalance_${user.id}`,
       ),
     ],
     [
       Markup.button.callback(
+        "⏳ Добавить подписку",
+        `admin_user_sub_${user.id}`,
+      ),
+      Markup.button.callback(
         user.isBanned ? "✅ Разбанить" : "🚫 Забанить",
         `admin_user_toggle_ban_${user.id}`,
+      ),
+    ],
+    [
+      Markup.button.callback(
+        "🎫 Создать Recovery-промо",
+        `admin_user_gen_recovery_${user.id}`,
       ),
     ],
     [Markup.button.callback("◀️ Назад к списку", "admin_users_0")],
@@ -175,6 +186,17 @@ export async function handleAdminUserAction(ctx: Context) {
     return ctx.reply("💰 Введите новую сумму баланса в ₽ (число):");
   }
 
+  if (data.startsWith("admin_user_refbalance_")) {
+    const userId = data.split("_")[3];
+    await prisma.user.update({
+      where: { telegramId: BigInt(telegramId) },
+      data: { botState: `admin_edit_refbalance:${userId}` },
+    });
+    return ctx.reply(
+      "🤝 Введите новую сумму РЕФЕРАЛЬНОГО баланса в ₽ (число):",
+    );
+  }
+
   if (data.startsWith("admin_user_toggle_ban_")) {
     const userId = data.split("_")[4];
     const user = await prisma.user.findUnique({ where: { id: userId } });
@@ -186,6 +208,36 @@ export async function handleAdminUserAction(ctx: Context) {
     });
 
     return handleAdminUserView(ctx);
+  }
+
+  if (data.startsWith("admin_user_gen_recovery_")) {
+    const userId = data.split("_")[4];
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) return ctx.answerCbQuery("❌ Пользователь не найден.");
+
+    const code = `RECOVERY_${user.login.toUpperCase()}_${crypto
+      .randomBytes(3)
+      .toString("hex")
+      .toUpperCase()}`;
+    await prisma.promoCode.create({
+      data: {
+        code,
+        maxActivations: 1,
+        conditions: [],
+        effects: [
+          { key: "referrer_id", value: user.id },
+          { key: "add_balance", value: "100" },
+        ],
+      },
+    });
+
+    return ctx.reply(
+      `✅ **Промокод создан!**\n\n` +
+        `Передайте этот код пользователю, который должен быть привязан к **${user.login}**:\n\n` +
+        `Code: \`${code}\`\n\n` +
+        `🎁 Бонус при активации: **100 ₽**`,
+      { parse_mode: "Markdown" },
+    );
   }
 
   if (data.startsWith("admin_user_sub_")) {

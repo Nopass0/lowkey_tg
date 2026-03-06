@@ -60,7 +60,11 @@ if (!process.env.TELEGRAM_BOT_TOKEN) {
 const ADMIN_ID = process.env.TELEGRAM_ADMIN_CHAT_ID?.trim();
 
 // Commands
-bot.command("start", handleStart);
+bot.command("start", async (ctx) => {
+  const payload = ctx.message.text.split(" ")[1] || "";
+  (ctx as any).startPayload = payload;
+  return handleStart(ctx);
+});
 
 // Actions
 bot.action("menu_main", handleMenuMain);
@@ -265,9 +269,33 @@ onPaymentSuccess(async (payment) => {
 startSubscriptionWorker();
 startPaymentWorker();
 
-// Launch
-bot.launch().then(() => {
-  console.log("Bot started!");
+// Polling notification listener
+onPaymentSuccess(async (data: any) => {
+  const { userId, amount, referrerId, commission } = data;
+
+  // 1. Notify the user who paid
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (user && user.telegramId) {
+    bot.telegram.sendMessage(
+      Number(user.telegramId),
+      `✅ Ваша оплата на **${amount} ₽** получена! Баланс пополнен.`,
+      { parse_mode: "Markdown" },
+    );
+  }
+
+  // 2. Notify the referrer if applicable
+  if (referrerId && commission > 0) {
+    const referrer = await prisma.user.findUnique({
+      where: { id: referrerId },
+    });
+    if (referrer && referrer.telegramId) {
+      bot.telegram.sendMessage(
+        Number(referrer.telegramId),
+        `🤝 Вам начислено **${commission.toFixed(2)} ₽** реферальных за пополнение вашего партнера **${user?.login}**!`,
+        { parse_mode: "Markdown" },
+      );
+    }
+  }
 });
 
 // Enable graceful stop

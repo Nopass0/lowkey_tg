@@ -53,12 +53,39 @@ export async function handleTextMessage(ctx: Context) {
       const referralCode = crypto.randomBytes(5).toString("hex");
 
       try {
-        const newUser = await prisma.user.create({
-          data: {
-            login: input,
-            passwordHash: passwordHash,
-            referralCode: referralCode,
-          },
+        const newUser = await prisma.$transaction(async (tx) => {
+          // Check for shadow user
+          const shadowUser = await tx.user.findUnique({
+            where: { telegramId: BigInt(telegramId) },
+          });
+
+          const finalReferredById = shadowUser?.tempReferrerId || null;
+
+          // If shadow user exists, we need to handle the unique login constraint
+          // If the shadow user's login is the temporary one, we can update it.
+          // Otherwise, we create a new one.
+          if (shadowUser && shadowUser.login.startsWith("tg_")) {
+            return await tx.user.update({
+              where: { id: shadowUser.id },
+              data: {
+                login: input,
+                passwordHash: passwordHash,
+                referralCode: referralCode,
+                referredById: finalReferredById,
+                tempReferrerId: null, // Clear temp
+              },
+            });
+          }
+
+          return await tx.user.create({
+            data: {
+              login: input,
+              passwordHash: passwordHash,
+              referralCode: referralCode,
+              telegramId: BigInt(telegramId),
+              referredById: finalReferredById,
+            },
+          });
         });
 
         return ctx.reply(
@@ -184,6 +211,43 @@ export async function handleTextMessage(ctx: Context) {
 
       return ctx.reply(
         `✅ Баланс пользователя **${updated.login}** изменен на **${amount} ₽**`,
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [
+                {
+                  text: "◀️ Вернуться к профилю",
+                  callback_data: `admin_user_view_${targetId}`,
+                },
+              ],
+            ],
+          },
+          parse_mode: "Markdown",
+        },
+      );
+    }
+
+    // Admin: Edit Referral Balance
+    if (
+      state.startsWith("admin_edit_refbalance:") &&
+      telegramId.toString() === ADMIN_ID
+    ) {
+      const targetId = state.split(":")[1];
+      const amount = parseFloat(text);
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { botState: null },
+      });
+
+      if (isNaN(amount)) return ctx.reply("❌ Введите корректное число.");
+
+      const updated = await prisma.user.update({
+        where: { id: targetId },
+        data: { referralBalance: amount },
+      });
+
+      return ctx.reply(
+        `✅ РЕФЕРАЛЬНЫЙ баланс пользователя **${updated.login}** изменен на **${amount} ₽**`,
         {
           reply_markup: {
             inline_keyboard: [
@@ -430,6 +494,14 @@ export async function handleTextMessage(ctx: Context) {
               amount: amount,
               title: `Активация промокода ${code}`,
             },
+          });
+        }
+      }
+      if (effect.key === "referrer_id") {
+        if (!user.referredById) {
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { referredById: effect.value },
           });
         }
       }

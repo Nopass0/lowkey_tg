@@ -82,7 +82,20 @@ export async function processPaymentSuccess(
     });
 
     // Notify listeners (e.g., to send a TG message)
-    listeners.forEach((cb) => cb({ userId, amount }));
+    // We add referrer info to the notification
+    const referrer = await prisma.user.findFirst({
+      where: { referrals: { some: { id: userId } } },
+      select: { id: true, telegramId: true, referralRate: true },
+    });
+
+    listeners.forEach((cb) =>
+      cb({
+        userId,
+        amount,
+        referrerId: referrer?.id,
+        commission: referrer ? amount * referrer.referralRate : 0,
+      }),
+    );
   } catch (error) {
     console.error("Error in processPaymentSuccess:", error);
   }
