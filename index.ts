@@ -4,12 +4,36 @@ import { prisma } from "./src/utils/prisma";
 // --- GLOBAL STABILITY FIXES ---
 // 1. Bun/Telegraf compatibility: Telegraf's redactToken tries to modify Error.message which can be readonly in Bun.
 try {
-  Object.defineProperty(Error.prototype, "message", {
+  // More aggressive patch: ensure it's writable on the instance or prototype
+  const originalError = Error;
+  (globalThis as any).Error = function (...args: any[]) {
+    const err = new originalError(...args);
+    Object.defineProperty(err, "message", {
+      value: err.message,
+      writable: true,
+      configurable: true,
+    });
+    return err;
+  };
+  Object.setPrototypeOf(globalThis.Error, originalError);
+  Object.defineProperty(globalThis.Error, "prototype", {
+    value: originalError.prototype,
+    writable: false,
     configurable: true,
-    writable: true,
+  });
+
+  // Fallback for existing items
+  Object.defineProperty(Error.prototype, "message", {
+    get() {
+      return (this as any)._message;
+    },
+    set(v) {
+      (this as any)._message = v;
+    },
+    configurable: true,
   });
 } catch (e) {
-  console.error("Failed to make Error.message writable:", e);
+  console.error("Failed to apply stability patches:", e);
 }
 
 // 2. Global Error Handlers

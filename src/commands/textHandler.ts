@@ -577,10 +577,54 @@ export async function handleTextMessage(ctx: Context) {
       }
       if (effect.key === "referrer_id") {
         if (!user.referredById) {
-          await prisma.user.update({
-            where: { id: user.id },
-            data: { referredById: effect.value },
+          const referrerId = effect.value;
+          const referrer = await prisma.user.findUnique({
+            where: { id: referrerId },
           });
+
+          if (referrer) {
+            // Find all past successful payments of this user
+            const pastPayments = await prisma.payment.findMany({
+              where: { userId: user.id, status: "success" },
+            });
+
+            const totalAmount = pastPayments.reduce((s, p) => s + p.amount, 0);
+            const totalCommission = totalAmount * referrer.referralRate;
+
+            await prisma.user.update({
+              where: { id: user.id },
+              data: { referredById: referrerId },
+            });
+
+            if (totalCommission > 0) {
+              await prisma.user.update({
+                where: { id: referrerId },
+                data: { referralBalance: { increment: totalCommission } },
+              });
+
+              await prisma.transaction.create({
+                data: {
+                  userId: referrerId,
+                  type: "referral_commission",
+                  amount: totalCommission,
+                  title: `Ретроактивный бонус за реферала ${user.login} (${totalAmount} ₽)`,
+                },
+              });
+
+              // Notify referrer if possible
+              if (referrer.telegramId) {
+                try {
+                  await bot.telegram.sendMessage(
+                    Number(referrer.telegramId),
+                    `🤝 **Реферальное восстановление!**\n\n` +
+                      `Ваш партнер **${user.login}** успешно привязан к вам.\n` +
+                      `Вам начислено **${totalCommission.toFixed(2)} ₽** комиссии за его прошлые пополнения!`,
+                    { parse_mode: "Markdown" },
+                  );
+                } catch {}
+              }
+            }
+          }
         }
       }
     }

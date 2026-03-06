@@ -322,11 +322,15 @@ export async function handleMenuReferral(ctx: Context) {
   const link = `https://t.me/${botInfo.username}?start=${user.referralCode}`;
 
   const ratePct = (user.referralRate * 100).toFixed(0);
+  const referralsCount = await prisma.user.count({
+    where: { referredById: user.id },
+  });
 
   await ctx.editMessageText(
     `🤝 **Партнерская программа**\n\n` +
       `Приглашайте друзей и получайте ${ratePct}% от всех их пополнений!\n\n` +
-      `Ваш реферальный баланс: **${user.referralBalance} ₽**\n` +
+      `👥 Приведено рефералов: **${referralsCount}**\n` +
+      `💰 Ваш реферальный баланс: **${user.referralBalance} ₽**\n\n` +
       `Ваша персональная ссылка:\n\`${link}\``,
     {
       parse_mode: "Markdown",
