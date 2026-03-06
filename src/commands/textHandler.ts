@@ -3,6 +3,8 @@ import { prisma } from "../utils/prisma";
 import { bot, getMainMenu } from "../utils/bot";
 import { handleMenuMain } from "../actions/menus";
 import { getSbpClient } from "../utils/sbp";
+import bcrypt from "bcryptjs";
+import crypto from "node:crypto";
 
 export async function handleTextMessage(ctx: Context) {
   if (!ctx.message || !("text" in ctx.message)) return;
@@ -27,11 +29,76 @@ export async function handleTextMessage(ctx: Context) {
     });
 
     if (!targetUser) {
-      return ctx.reply(
-        "👋 Добро пожаловать в Lowkey VPN!\n\n" +
-          "Для начала использования, пожалуйста, пришлите ваш **логин** или **код привязки** из личного кабинета на сайте.\n\n" +
-          "Если у вас еще нет аккаунта, просто введите желаемый логин для регистрации.",
-      );
+      if (input.length < 3 || input.length > 24) {
+        return ctx.reply(
+          "❌ Логин должен содержать от 3 до 24 символов.\n\n" +
+            "Если вы пытались войти, проверьте правильность введенного кода привязки.",
+        );
+      }
+
+      if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input)) {
+        return ctx.reply(
+          "❌ Логин не может быть email адресом. Придумайте уникальное имя пользователя.",
+        );
+      }
+
+      if (!/^[a-zA-Z0-9_]+$/.test(input)) {
+        return ctx.reply(
+          "❌ Логин может содержать только латинские буквы, цифры и подчеркивания без пробелов.",
+        );
+      }
+
+      const tempPassword = crypto.randomBytes(4).toString("hex");
+      const passwordHash = await bcrypt.hash(tempPassword, 10);
+      const referralCode = crypto.randomBytes(5).toString("hex");
+
+      try {
+        const newUser = await prisma.user.create({
+          data: {
+            login: input,
+            passwordHash: passwordHash,
+            referralCode: referralCode,
+          },
+        });
+
+        return ctx.reply(
+          `🎉 **Аккаунт ${newUser.login} успешно создан!**\n\n` +
+            `Мы сгенерировали для вас пароль для доступа в личный кабинет на сайте:\n` +
+            `🔑 **Пароль:** \`${tempPassword}\`\n\n` +
+            `*(Вы сможете изменить его позже)*\n\n` +
+            `Для завершения регистрации и привязки Telegram, пожалуйста, ознакомьтесь с нашей Офертой и Политикой конфиденциальности.`,
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: "📜 Публичная оферта", callback_data: "legal_offer" }],
+                [
+                  {
+                    text: "🔒 Политика конфиденциальности",
+                    callback_data: "legal_privacy",
+                  },
+                ],
+                [
+                  {
+                    text: "✅ Принять и войти",
+                    callback_data: `legal_accept_all:${newUser.id}`,
+                  },
+                ],
+              ],
+            },
+            parse_mode: "Markdown",
+          },
+        );
+      } catch (err: any) {
+        if (err.code === "P2002") {
+          return ctx.reply(
+            "❌ Этот логин уже занят или код привязки недействителен. Пожалуйста, попробуйте другой логин.",
+          );
+        }
+        console.error("Registration error:", err);
+        return ctx.reply(
+          "❌ Произошла ошибка при регистрации. Попробуйте позже.",
+        );
+      }
     }
 
     if (targetUser.telegramId && targetUser.telegramId !== BigInt(telegramId)) {
