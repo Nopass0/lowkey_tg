@@ -1,5 +1,27 @@
 import { bot } from "./src/utils/bot";
 import { prisma } from "./src/utils/prisma";
+
+// --- GLOBAL STABILITY FIXES ---
+// 1. Bun/Telegraf compatibility: Telegraf's redactToken tries to modify Error.message which can be readonly in Bun.
+try {
+  Object.defineProperty(Error.prototype, "message", {
+    configurable: true,
+    writable: true,
+  });
+} catch (e) {
+  console.error("Failed to make Error.message writable:", e);
+}
+
+// 2. Global Error Handlers
+process.on("uncaughtException", (err) => {
+  console.error("[Global] Uncaught Exception:", err);
+});
+
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("[Global] Unhandled Rejection at:", promise, "reason:", reason);
+});
+// ------------------------------
+
 import { handleStart } from "./src/commands/start";
 import { handleTextMessage } from "./src/commands/textHandler";
 import {
@@ -43,19 +65,13 @@ import {
   handleAdminBroadcast,
 } from "./src/actions/admin";
 
-// Global error handlers to ensure bot doesn't crash
-process.on("uncaughtException", (err) => {
-  console.error("[Global] Uncaught Exception:", err);
-});
-
-process.on("unhandledRejection", (reason, promise) => {
-  console.error("[Global] Unhandled Rejection at:", promise, "reason:", reason);
-});
-
-// Validate envs
 if (!process.env.TELEGRAM_BOT_TOKEN) {
   throw new Error("TELEGRAM_BOT_TOKEN must be set in .env");
 }
+
+bot.catch((err: any, ctx) => {
+  console.error(`[Telegraf] Error for ${ctx.updateType}:`, err);
+});
 
 const ADMIN_ID = process.env.TELEGRAM_ADMIN_CHAT_ID?.trim();
 
@@ -301,6 +317,23 @@ onPaymentSuccess(async (data: any) => {
   }
 });
 
+// Start workers
+startSubscriptionWorker();
+startPaymentWorker();
+
+// Launch
+bot.launch().then(() => {
+  console.log("Bot started!");
+});
+
 // Enable graceful stop
-process.once("SIGINT", () => bot.stop("SIGINT"));
-process.once("SIGTERM", () => bot.stop("SIGTERM"));
+process.once("SIGINT", () => {
+  try {
+    bot.stop("SIGINT");
+  } catch (e) {}
+});
+process.once("SIGTERM", () => {
+  try {
+    bot.stop("SIGTERM");
+  } catch (e) {}
+});
