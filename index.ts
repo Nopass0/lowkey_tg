@@ -94,6 +94,7 @@ bot.action("how_to_connect", handleHowToConnect);
 bot.action("how_to_android", handleHowToAndroid);
 bot.action("how_to_ios", handleHowToIos);
 bot.action("how_to_windows", handleHowToWindows);
+bot.action("how_to_setup", handleHowToSetup);
 
 bot.action("legal_offer", async (ctx) => {
   const text =
