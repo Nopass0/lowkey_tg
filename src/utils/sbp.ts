@@ -129,18 +129,23 @@ export function startPaymentWorker() {
             firstStatus = firstStatus.data[0];
           }
 
-          if (!firstStatus || !firstStatus.operationStatus) continue;
-          const status = firstStatus.operationStatus;
+          if (!firstStatus) continue;
+          const status = firstStatus.operationStatus || firstStatus.status;
+          if (!status) continue;
 
           console.log(`Parsed SBP status:`, status);
 
-          if (status === "ACWP" || status === "ACSC") {
+          if (status === "ACWP" || status === "ACSC" || status === "Accepted") {
             await prisma.payment.update({
               where: { id: payment.id },
               data: { status: "success" },
             });
             await processPaymentSuccess(payment.userId, payment.amount);
-          } else if (status === "RJCT" || status === "CANC") {
+          } else if (
+            status === "RJCT" ||
+            status === "CANC" ||
+            status === "Rejected"
+          ) {
             await prisma.payment.update({
               where: { id: payment.id },
               data: { status: "failed" },

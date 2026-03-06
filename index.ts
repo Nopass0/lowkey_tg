@@ -171,7 +171,7 @@ bot.action(/^check_payment_(.+)$/, async (ctx) => {
       firstStatus = firstStatus.data[0];
     }
 
-    if (!firstStatus || !firstStatus.operationStatus) {
+    if (!firstStatus) {
       return ctx.answerCbQuery(
         "⏳ Платёж еще не прошел. Подождите пару минут.",
         {
@@ -180,9 +180,18 @@ bot.action(/^check_payment_(.+)$/, async (ctx) => {
       );
     }
 
-    const status = firstStatus.operationStatus;
+    const status = firstStatus.operationStatus || firstStatus.status;
 
-    if (status === "ACWP" || status === "ACSC") {
+    if (!status) {
+      return ctx.answerCbQuery(
+        "⏳ Платёж еще не прошел. Подождите пару минут.",
+        {
+          show_alert: true,
+        },
+      );
+    }
+
+    if (status === "ACWP" || status === "ACSC" || status === "Accepted") {
       await prisma.payment.update({
         where: { id: payment.id },
         data: { status: "success" },
@@ -196,7 +205,11 @@ bot.action(/^check_payment_(.+)$/, async (ctx) => {
         { parse_mode: "Markdown" },
       );
       return ctx.answerCbQuery("✅ Оплата прошла успешно!");
-    } else if (status === "RJCT" || status === "CANC") {
+    } else if (
+      status === "RJCT" ||
+      status === "CANC" ||
+      status === "Rejected"
+    ) {
       await prisma.payment.update({
         where: { id: payment.id },
         data: { status: "failed" },
