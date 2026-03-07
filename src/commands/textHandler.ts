@@ -19,8 +19,8 @@ export async function handleTextMessage(ctx: Context) {
   const text = ctx.message.text.trim();
   const ADMIN_ID = process.env.TELEGRAM_ADMIN_CHAT_ID?.trim();
 
-  // 1. Handling users NOT linked to Telegram
-  if (!user) {
+  // 1. Handling users NOT linked to Telegram or shadow users from /start ref
+  if (!user || user.login.startsWith("tg_")) {
     const input = text;
     const targetUser = await prisma.user.findFirst({
       where: {
@@ -412,7 +412,7 @@ export async function handleTextMessage(ctx: Context) {
     }
 
     if (state.startsWith("withdraw_2:")) {
-      const card = state.split(":")[1];
+      const card = state.split(":")[1] || "";
       await prisma.user.update({
         where: { id: user.id },
         data: { botState: `withdraw_3:${card}:${text}` },
@@ -422,8 +422,8 @@ export async function handleTextMessage(ctx: Context) {
 
     if (state.startsWith("withdraw_3:")) {
       const parts = state.split(":");
-      const card = parts[1];
-      const bank = parts[2];
+      const card = parts[1] || "";
+      const bank = parts[2] || "";
       const fio = text;
       const amount = user.referralBalance;
 
@@ -509,9 +509,12 @@ export async function handleTextMessage(ctx: Context) {
     const parts = text.split(" ");
     if (parts.length < 4)
       return ctx.reply("❌ Формат: `/create_promo <rate_0.XX> <CODE> <limit>`");
-    let rate = parseFloat(parts[1]);
-    const code = parts[2].toUpperCase();
-    const limit = parseInt(parts[3]);
+
+    const rateStr = parts[1] || "0";
+    let rate = parseFloat(rateStr);
+    const code = (parts[2] || "PROMO").toUpperCase();
+    const limitStr = parts[3] || "0";
+    const limit = parseInt(limitStr);
 
     if (isNaN(rate) || isNaN(limit)) return ctx.reply("❌ Некорректные числа.");
 

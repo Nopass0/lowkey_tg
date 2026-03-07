@@ -27,8 +27,8 @@ export async function handleStart(ctx: Context) {
     }
   }
 
-  if (user) {
-    // If user exists, we might want to update their tempReferrerId if they don't have a permanent referrer yet
+  if (user && !user.login.startsWith("tg_")) {
+    // If user exists and is real, we might want to update their referrer if they don't have one
     if (!user.referredById && referrerId && user.id !== referrerId) {
       await prisma.user.update({
         where: { id: user.id },
@@ -55,14 +55,7 @@ export async function handleStart(ctx: Context) {
       reply_markup: { inline_keyboard: kb },
     });
   } else {
-    // For new users, we can't update a record that doesn't exist.
-    // However, the textHandler will handle the registration.
-    // We can't easily pass the referrerId to textHandler via 'ctx' in a way that survives the next message,
-    // so we'll rely on the user sending their login, and we'll check the 'start' context then?
-    // Actually, a better way is to create a 'shadow' user or use a more persistent state.
-    // For now, let's assume we want to store this in a temporary session-like way or
-    // simply tell the user they were invited.
-
+    // New user OR shadow user (user.login starts with tg_)
     let welcomeText =
       "Привет! Я бот Lowkey VPN. 🛡️\n\n" +
       "Для начала использования VPN, пожалуйста, отправьте мне желаемый **логин** (от 3 до 24 символов).\n\n" +
@@ -71,21 +64,20 @@ export async function handleStart(ctx: Context) {
     if (referrerId) {
       welcomeText =
         "👋 Привет! Вы перешли по реферальной ссылке.\n\n" + welcomeText;
-
-      // Create or update a shadow user to persist the referral link
-      // We use a dummy login and password because they're required fields
-      await prisma.user.upsert({
-        where: { telegramId: BigInt(telegramId) },
-        update: { tempReferrerId: referrerId },
-        create: {
-          telegramId: BigInt(telegramId),
-          login: `tg_${telegramId}`, // Temporary login
-          passwordHash: "shadow", // Placeholder
-          referralCode: `ref_${telegramId}`, // Placeholder
-          tempReferrerId: referrerId,
-        },
-      });
     }
+
+    // Persist or update the shadow user state
+    await prisma.user.upsert({
+      where: { telegramId: BigInt(telegramId) },
+      update: { tempReferrerId: referrerId },
+      create: {
+        telegramId: BigInt(telegramId),
+        login: `tg_${telegramId}`,
+        passwordHash: "shadow",
+        referralCode: `ref_${telegramId}`,
+        tempReferrerId: referrerId,
+      },
+    });
 
     return ctx.reply(welcomeText);
   }
