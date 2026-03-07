@@ -129,40 +129,89 @@ export async function handleTextMessage(ctx: Context) {
     }
 
     if (targetUser.telegramId && targetUser.telegramId !== BigInt(telegramId)) {
-      return ctx.reply("❌ Этот аккаунт уже привязан к другому Telegram.");
+      await prisma.user.update({
+        where: { telegramId: BigInt(telegramId) },
+        data: { botState: `login_password:${targetUser.id}` },
+      });
+      return ctx.reply(
+        `🔑 Аккаунт **${targetUser.login}** уже привязан к другому Telegram.\n\n` +
+          "Для смены привязки на этот аккаунт, пожалуйста, введите **пароль** от вашего личного кабинета:",
+        { parse_mode: "Markdown" },
+      );
     }
 
-    // Instead of linking immediately, show legal agreement
-    return ctx.reply(
-      `🔍 Аккаунт **${targetUser.login}** найден!\n\n` +
-        "Для продолжения вам необходимо ознакомиться и согласиться с нашей Офертой и Политикой конфиденциальности.\n\n" +
-        "Нажимая кнопку «Принять и привязать», вы подтверждаете свое согласие с условиями.",
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "📜 Публичная оферта", callback_data: "legal_offer" }],
-            [
-              {
-                text: "🔒 Политика конфиденциальности",
-                callback_data: "legal_privacy",
-              },
-            ],
-            [
-              {
-                text: "✅ Принять и привязать",
-                callback_data: `legal_accept_all:${targetUser.id}`,
-              },
-            ],
-          ],
-        },
-        parse_mode: "Markdown",
-      },
-    );
+    // Existing user found but NOT linked to this TG yet (telegramId is null)
+    // We ask for password to verify ownership
+    if (!targetUser.telegramId) {
+      await prisma.user.update({
+        where: { telegramId: BigInt(telegramId) },
+        data: { botState: `login_password:${targetUser.id}` },
+      });
+      return ctx.reply(
+        `🔍 Аккаунт **${targetUser.login}** найден!\n\n` +
+          "Пожалуйста, введите **пароль** для подтверждения владения аккаунтом:",
+        { parse_mode: "Markdown" },
+      );
+    }
   }
 
   // 2. Handling users ALREADY linked (State-based)
   if (user && user.botState) {
     const state = user.botState;
+
+    // Login via Password
+    if (state.startsWith("login_password:")) {
+      const targetUserId = state.split(":")[1];
+      const targetUser = await prisma.user.findUnique({
+        where: { id: targetUserId },
+      });
+
+      if (!targetUser) {
+        await prisma.user.update({
+          where: { id: user.id },
+          data: { botState: null },
+        });
+        return ctx.reply("❌ Произошла ошибка. Пользователь не найден.");
+      }
+
+      const isValid = await bcrypt.compare(text, targetUser.passwordHash);
+      if (!isValid) {
+        return ctx.reply(
+          "❌ Неверный пароль. Попробуйте еще раз или отправьте другой логин для регистрации:",
+        );
+      }
+
+      // Password is valid - proceed to legal agreement
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { botState: null },
+      });
+
+      return ctx.reply(
+        `✅ Пароль верный! Аккаунт **${targetUser.login}** подтвержден.\n\n` +
+          "Для завершения привязки ознакомьтесь с Офертой и Политикой конфиденциальности:",
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "📜 Публичная оферта", callback_data: "legal_offer" }],
+              [
+                {
+                  text: "🔒 Политика конфиденциальности",
+                  callback_data: "legal_privacy",
+                },
+              ],
+              [
+                {
+                  text: "✅ Принять и привязать",
+                  callback_data: `legal_accept_all:${targetUser.id}`,
+                },
+              ],
+            ],
+          },
+          parse_mode: "Markdown",
+        },
+      );
+    }
 
     // Admin: Search User
     if (state === "admin_search_user" && telegramId.toString() === ADMIN_ID) {

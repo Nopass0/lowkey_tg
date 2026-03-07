@@ -79,6 +79,6 @@ export async function handleStart(ctx: Context) {
       },
     });
 
-    return ctx.reply(welcomeText);
+    return ctx.reply(welcomeText, { parse_mode: "Markdown" });
   }
 }
