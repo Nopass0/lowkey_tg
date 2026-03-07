@@ -101,8 +101,11 @@ const ADMIN_ID = process.env.TELEGRAM_ADMIN_CHAT_ID?.trim();
 
 // Commands
 bot.command("start", async (ctx) => {
-  const payload = ctx.message.text.split(" ")[1] || "";
+  console.log(`[/start] Received from ${ctx.from?.id}`);
+  const text = (ctx.message as any)?.text || "";
+  const payload = text.split(" ")[1] || "";
   (ctx as any).startPayload = payload;
+  console.log(`[/start] Payload: "${payload}"`);
   return handleStart(ctx);
 });
 
@@ -171,6 +174,15 @@ bot.action(/^legal_accept_all:(.+)$/, async (ctx) => {
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) return ctx.answerCbQuery("❌ Ошибка: пользователь не найден.");
 
+  // Fetch the shadow user (the one currently interacting) to get potential referral link
+  const shadowUser = await prisma.user.findUnique({
+    where: { telegramId: BigInt(telegramId) },
+    select: { tempReferrerId: true, id: true, login: true },
+  });
+
+  const finalReferredById =
+    user.referredById || shadowUser?.tempReferrerId || null;
+
   if (user.telegramId && user.telegramId !== BigInt(telegramId)) {
     return ctx.answerCbQuery(
       "❌ Этот аккаунт уже привязан к другому Telegram.",
@@ -179,8 +191,39 @@ bot.action(/^legal_accept_all:(.+)$/, async (ctx) => {
 
   await prisma.user.update({
     where: { id: userId },
-    data: { telegramId: BigInt(telegramId), telegramLinkCode: null },
+    data: {
+      telegramId: BigInt(telegramId),
+      telegramLinkCode: null,
+      referredById: finalReferredById,
+    },
   });
+
+  // If a referral was just applied, notify the referrer
+  if (!user.referredById && finalReferredById) {
+    const referrer = await prisma.user.findUnique({
+      where: { id: finalReferredById },
+      select: { telegramId: true },
+    });
+    if (referrer?.telegramId) {
+      try {
+        await bot.telegram.sendMessage(
+          Number(referrer.telegramId),
+          `🤝 Пользователь <b>${user.login}</b> зарегистрировался по вашей ссылке!`,
+          { parse_mode: "HTML" },
+        );
+      } catch {}
+    }
+  }
+
+  // Cleanup: if the user was shadow-user, we might want to delete that shadow record
+  // but only if it's NOT the same record.
+  if (
+    shadowUser &&
+    shadowUser.id !== userId &&
+    shadowUser.login.startsWith("tg_")
+  ) {
+    await prisma.user.delete({ where: { id: shadowUser.id } }).catch(() => {});
+  }
 
   await ctx.answerCbQuery("✅ Вы успешно привязали аккаунт!");
   await ctx.editMessageText(

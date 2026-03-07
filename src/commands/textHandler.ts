@@ -98,18 +98,18 @@ export async function handleTextMessage(ctx: Context) {
             try {
               await bot.telegram.sendMessage(
                 Number(referrer.telegramId),
-                `🤝 Пользователь **${newUser.login}** зарегистрировался по вашей ссылке!`,
-                { parse_mode: "Markdown" },
+                `🤝 Пользователь <b>${newUser.login}</b> зарегистрировался по вашей ссылке!`,
+                { parse_mode: "HTML" },
               );
             } catch {}
           }
         }
 
         return ctx.reply(
-          `🎉 **Аккаунт ${newUser.login} успешно создан!**\n\n` +
+          `🎉 <b>Аккаунт ${newUser.login} успешно создан!</b>\n\n` +
             `Мы сгенерировали для вас пароль для доступа в личный кабинет на сайте:\n` +
-            `🔑 **Пароль:** \`${tempPassword}\`\n\n` +
-            `*(Вы сможете изменить его позже)*\n\n` +
+            `🔑 <b>Пароль:</b> <code>${tempPassword}</code>\n\n` +
+            `<i>(Вы сможете изменить его позже)</i>\n\n` +
             `Для завершения регистрации и привязки Telegram, пожалуйста, ознакомьтесь с нашей Офертой и Политикой конфиденциальности.`,
           {
             reply_markup: {
@@ -129,7 +129,7 @@ export async function handleTextMessage(ctx: Context) {
                 ],
               ],
             },
-            parse_mode: "Markdown",
+            parse_mode: "HTML",
           },
         );
       } catch (err: any) {
@@ -158,9 +158,9 @@ export async function handleTextMessage(ctx: Context) {
         },
       });
       return ctx.reply(
-        `🔑 Аккаунт **${targetUser.login}** уже привязан к другому Telegram.\n\n` +
-          "Для смены привязки на этот аккаунт, пожалуйста, введите **пароль** от вашего личного кабинета:",
-        { parse_mode: "Markdown" },
+        `🔑 Аккаунт <b>${targetUser.login}</b> уже привязан к другому Telegram.\n\n` +
+          "Для смены привязки на этот аккаунт, пожалуйста, введите <b>пароль</b> от вашего личного кабинета:",
+        { parse_mode: "HTML" },
       );
     }
 
@@ -179,9 +179,9 @@ export async function handleTextMessage(ctx: Context) {
         },
       });
       return ctx.reply(
-        `🔍 Аккаунт **${targetUser.login}** найден!\n\n` +
-          "Пожалуйста, введите **пароль** для подтверждения владения аккаунтом:",
-        { parse_mode: "Markdown" },
+        `🔍 Аккаунт <b>${targetUser.login}</b> найден!\n\n` +
+          "Пожалуйста, введите <b>пароль</b> для подтверждения владения аккаунтом:",
+        { parse_mode: "HTML" },
       );
     }
   }
@@ -219,7 +219,7 @@ export async function handleTextMessage(ctx: Context) {
       });
 
       return ctx.reply(
-        `✅ Пароль верный! Аккаунт **${targetUser.login}** подтвержден.\n\n` +
+        `✅ Пароль верный! Аккаунт <b>${targetUser.login}</b> подтвержден.\n\n` +
           "Для завершения привязки ознакомьтесь с Офертой и Политикой конфиденциальности:",
         {
           reply_markup: {
@@ -239,7 +239,7 @@ export async function handleTextMessage(ctx: Context) {
               ],
             ],
           },
-          parse_mode: "Markdown",
+          parse_mode: "HTML",
         },
       );
     }
