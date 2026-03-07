@@ -88,17 +88,35 @@ export async function handleStart(ctx: Context) {
       }
 
       // Persist or update the shadow user state
-      await prisma.user.upsert({
-        where: { telegramId: BigInt(telegramId) },
-        update: { tempReferrerId: referrerId },
-        create: {
-          telegramId: BigInt(telegramId),
-          login: `tg_${telegramId}`,
-          passwordHash: "shadow",
-          referralCode: `ref_${telegramId}`,
-          tempReferrerId: referrerId,
-        },
-      });
+      // We use telegramId as the primary key for the bot session.
+      // If we can't create a shadow user due to login collision, we try to find it.
+      try {
+        await prisma.user.upsert({
+          where: { telegramId: BigInt(telegramId) },
+          update: { tempReferrerId: referrerId },
+          create: {
+            telegramId: BigInt(telegramId),
+            login: `tg_${telegramId}`,
+            passwordHash: "shadow",
+            referralCode: `ref_${telegramId}`,
+            tempReferrerId: referrerId,
+          },
+        });
+      } catch (err: any) {
+        if (err.code === "P2002" && err.meta?.target?.includes("login")) {
+          // If login conflicts, it means a record with tg_ID already exists but without this TG ID.
+          // This shouldn't happen normally, but we handle it by updating that record instead.
+          await prisma.user.update({
+            where: { login: `tg_${telegramId}` },
+            data: {
+              telegramId: BigInt(telegramId),
+              tempReferrerId: referrerId,
+            },
+          });
+        } else {
+          throw err;
+        }
+      }
 
       return ctx.reply(welcomeText, { parse_mode: "HTML" });
     }

@@ -174,7 +174,7 @@ bot.action(/^legal_accept_all:(.+)$/, async (ctx) => {
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) return ctx.answerCbQuery("❌ Ошибка: пользователь не найден.");
 
-  // Fetch the shadow user (the one currently interacting) to get potential referral link
+  // Fetch the shadow user to get potential referral link from the Current Session
   const shadowUser = await prisma.user.findUnique({
     where: { telegramId: BigInt(telegramId) },
     select: { tempReferrerId: true, id: true, login: true },
@@ -198,7 +198,7 @@ bot.action(/^legal_accept_all:(.+)$/, async (ctx) => {
     },
   });
 
-  // If a referral was just applied, notify the referrer
+  // If a referral was just applied (user didn't have one, but session did)
   if (!user.referredById && finalReferredById) {
     const referrer = await prisma.user.findUnique({
       where: { id: finalReferredById },
@@ -208,15 +208,14 @@ bot.action(/^legal_accept_all:(.+)$/, async (ctx) => {
       try {
         await bot.telegram.sendMessage(
           Number(referrer.telegramId),
-          `🤝 Пользователь <b>${user.login}</b> зарегистрировался по вашей ссылке!`,
+          `🤝 Пользователь <b>${user.login}</b> (уже был аккаунт) привязался по вашей ссылке!`,
           { parse_mode: "HTML" },
         );
       } catch {}
     }
   }
 
-  // Cleanup: if the user was shadow-user, we might want to delete that shadow record
-  // but only if it's NOT the same record.
+  // Cleanup: if the session user was separate shadow record, delete it
   if (
     shadowUser &&
     shadowUser.id !== userId &&
