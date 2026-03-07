@@ -88,6 +88,23 @@ export async function handleTextMessage(ctx: Context) {
           });
         });
 
+        // Notify referrer
+        if (newUser.referredById) {
+          const referrer = await prisma.user.findUnique({
+            where: { id: newUser.referredById },
+            select: { telegramId: true },
+          });
+          if (referrer?.telegramId) {
+            try {
+              await bot.telegram.sendMessage(
+                Number(referrer.telegramId),
+                `🤝 Пользователь **${newUser.login}** зарегистрировался по вашей ссылке!`,
+                { parse_mode: "Markdown" },
+              );
+            } catch {}
+          }
+        }
+
         return ctx.reply(
           `🎉 **Аккаунт ${newUser.login} успешно создан!**\n\n` +
             `Мы сгенерировали для вас пароль для доступа в личный кабинет на сайте:\n` +
@@ -129,9 +146,16 @@ export async function handleTextMessage(ctx: Context) {
     }
 
     if (targetUser.telegramId && targetUser.telegramId !== BigInt(telegramId)) {
-      await prisma.user.update({
+      await prisma.user.upsert({
         where: { telegramId: BigInt(telegramId) },
-        data: { botState: `login_password:${targetUser.id}` },
+        update: { botState: `login_password:${targetUser.id}` },
+        create: {
+          telegramId: BigInt(telegramId),
+          login: `tg_${telegramId}`,
+          passwordHash: "shadow",
+          referralCode: `ref_${telegramId}`,
+          botState: `login_password:${targetUser.id}`,
+        },
       });
       return ctx.reply(
         `🔑 Аккаунт **${targetUser.login}** уже привязан к другому Telegram.\n\n` +
@@ -143,9 +167,16 @@ export async function handleTextMessage(ctx: Context) {
     // Existing user found but NOT linked to this TG yet (telegramId is null)
     // We ask for password to verify ownership
     if (!targetUser.telegramId) {
-      await prisma.user.update({
+      await prisma.user.upsert({
         where: { telegramId: BigInt(telegramId) },
-        data: { botState: `login_password:${targetUser.id}` },
+        update: { botState: `login_password:${targetUser.id}` },
+        create: {
+          telegramId: BigInt(telegramId),
+          login: `tg_${telegramId}`,
+          passwordHash: "shadow",
+          referralCode: `ref_${telegramId}`,
+          botState: `login_password:${targetUser.id}`,
+        },
       });
       return ctx.reply(
         `🔍 Аккаунт **${targetUser.login}** найден!\n\n` +
@@ -520,6 +551,9 @@ export async function handleTextMessage(ctx: Context) {
     }
   }
 
+  // From here on, we need a valid user record
+  if (!user) return;
+
   // 3. Command & Numeric Parsing
   const safeAdminId = ADMIN_ID || "";
   if (text.toLowerCase() === "меню") {
@@ -707,7 +741,7 @@ export async function handleTextMessage(ctx: Context) {
         amount: amountToTopup * 100, // В копейках
         merchantId: process.env.TOCHKA_MERCHANT_ID || "",
         accountId: process.env.TOCHKA_ACCOUNT_ID || "",
-        description: `Пополнение баланса (User: ${user!.login})`,
+        description: `Пополнение баланса (User: ${user.login})`,
         qrcType: "DYNAMIC",
         ttl: 30 * 60, // 30 минут
       });
@@ -715,7 +749,7 @@ export async function handleTextMessage(ctx: Context) {
       await prisma.payment.create({
         data: {
           sbpPaymentId: payment.qrcId,
-          userId: user!.id,
+          userId: user.id,
           amount: amountToTopup,
           status: "pending",
           qrUrl: payment.imageBase64 || "", // Сохраняем QR картинку если есть

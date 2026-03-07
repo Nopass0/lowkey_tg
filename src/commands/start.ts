@@ -55,15 +55,19 @@ export async function handleStart(ctx: Context) {
       reply_markup: { inline_keyboard: kb },
     });
   } else {
-    // New user OR shadow user (user.login starts with tg_)
     let welcomeText =
       "Привет! Я бот Lowkey VPN. 🛡️\n\n" +
       "Для начала использования VPN, пожалуйста, отправьте мне желаемый **логин** (от 3 до 24 символов).\n\n" +
       "Если аккаунт с таким логином уже существует, вы привяжете его. Иначе мы создадим для вас новый профиль.";
 
     if (referrerId) {
+      const referrer = await prisma.user.findUnique({
+        where: { id: referrerId },
+        select: { login: true },
+      });
       welcomeText =
-        "👋 Привет! Вы перешли по реферальной ссылке.\n\n" + welcomeText;
+        `👋 Привет! Вы пришли по приглашению от **${referrer?.login || "партнера"}**.\n\n` +
+        welcomeText;
     }
 
     // Persist or update the shadow user state
