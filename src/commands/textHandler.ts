@@ -568,7 +568,7 @@ export async function handleTextMessage(ctx: Context) {
           await prisma.transaction.create({
             data: {
               userId: user.id,
-              type: "promo_activation",
+              type: "promo_topup",
               amount: amount,
               title: `Активация промокода ${code}`,
             },

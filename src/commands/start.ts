@@ -14,12 +14,14 @@ export async function handleStart(ctx: Context) {
   const startPayload = (ctx as any).startPayload || "";
   let referrerId: string | null = null;
 
-  if (startPayload.startsWith("ref_")) {
-    const refCode = startPayload.replace("ref_", "");
+  if (startPayload) {
+    // Try both with and without "ref_" prefix
+    const refCode = startPayload.replace(/^ref_/, "");
     const referrer = await prisma.user.findUnique({
       where: { referralCode: refCode },
       select: { id: true },
     });
+
     if (referrer) {
       referrerId = referrer.id;
     }
@@ -30,7 +32,7 @@ export async function handleStart(ctx: Context) {
     if (!user.referredById && referrerId && user.id !== referrerId) {
       await prisma.user.update({
         where: { id: user.id },
-        data: { tempReferrerId: referrerId },
+        data: { referredById: referrerId },
       });
     }
 
