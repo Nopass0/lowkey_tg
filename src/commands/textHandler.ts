@@ -1,51 +1,209 @@
-import { Context, Markup } from "telegraf";
-import { prisma } from "../utils/prisma";
-import { bot, getMainMenu } from "../utils/bot";
-import { handleMenuMain } from "../actions/menus";
-import { getSbpClient } from "../utils/sbp";
 import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
+import { type Context } from "telegraf";
+import { prisma } from "../utils/prisma";
+import { bot, getMainMenu } from "../utils/bot";
+import { getSbpClient } from "../utils/sbp";
+import { LEGAL_URLS } from "../utils/constants";
+import { createRecoveryPromo, generatePromoSuffix } from "../actions/admin";
+import { encodeBotState, decodeBotState } from "../utils/state";
+import { escapeHtml } from "../utils/telegram";
+import { asPromoRules, validatePromoConditions } from "../utils/promo";
+import { formatTicketPreview } from "../utils/support";
 
+const ADMIN_ID = process.env.TELEGRAM_ADMIN_CHAT_ID?.trim() || "";
+
+/**
+ * Builds legal acceptance buttons using public website URLs.
+ *
+ * @param userId User id that should be bound after acceptance.
+ * @returns Inline keyboard.
+ */
+function getLegalKeyboard(userId: string) {
+  return {
+    inline_keyboard: [
+      [{ text: "📜 Публичная оферта", url: LEGAL_URLS.offer }],
+      [{ text: "🔒 Политика конфиденциальности", url: LEGAL_URLS.privacy }],
+      [{ text: "✅ Принять и продолжить", callback_data: `legal_accept_all:${userId}` }],
+    ],
+  };
+}
+
+/**
+ * Parses scheduled datetime in `ДД.ММ.ГГГГ ЧЧ:ММ` format.
+ *
+ * @param raw Input text.
+ * @returns Parsed date or `null`.
+ */
+function parseScheduleDate(raw: string): Date | null {
+  const match = raw.trim().match(/^(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})$/);
+  if (!match) return null;
+
+  const [, day, month, year, hour, minute] = match;
+  const date = new Date(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour),
+    Number(minute),
+    0,
+    0,
+  );
+
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/**
+ * Applies a promo code to the current user.
+ *
+ * @param user Current user.
+ * @param codeText Promo code text from message.
+ * @returns Result message.
+ */
+async function activatePromo(user: any, codeText: string): Promise<string> {
+  const code = codeText.trim().toUpperCase();
+  const promo = await prisma.promoCode.findUnique({ where: { code } });
+  if (!promo) {
+    return "Промокод не найден.";
+  }
+
+  const existingActivation = await prisma.promoActivation.findUnique({
+    where: { userId_promoCodeId: { userId: user.id, promoCodeId: promo.id } },
+  });
+  if (existingActivation) {
+    return "Вы уже активировали этот промокод.";
+  }
+
+  const activationsCount = await prisma.promoActivation.count({
+    where: { promoCodeId: promo.id },
+  });
+  if (promo.maxActivations && activationsCount >= promo.maxActivations) {
+    return "Лимит активаций уже исчерпан.";
+  }
+
+  const conditions = asPromoRules(promo.conditions);
+  const conditionError = validatePromoConditions(user, conditions);
+  if (conditionError) {
+    return conditionError;
+  }
+
+  let balanceAdded = 0;
+  const effects = asPromoRules(promo.effects);
+
+  for (const effect of effects) {
+    if (effect.key === "set_referral_rate") {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { referralRate: Number(effect.value) },
+      });
+    }
+
+    if (effect.key === "discount_pct") {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { pendingDiscountPct: Number(effect.value) },
+      });
+    }
+
+    if (effect.key === "discount_fixed") {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { pendingDiscountFixed: Number(effect.value) },
+      });
+    }
+
+    if (effect.key === "add_balance") {
+      const amount = Number(effect.value);
+      if (amount > 0) {
+        balanceAdded += amount;
+        await prisma.user.update({
+          where: { id: user.id },
+          data: { balance: { increment: amount } },
+        });
+        await prisma.transaction.create({
+          data: {
+            userId: user.id,
+            type: "promo_topup",
+            amount,
+            title: `Активация промокода ${code}`,
+          },
+        });
+      }
+    }
+
+    if (effect.key === "referrer_id" && !user.referredById) {
+      const referrer = await prisma.user.findUnique({
+        where: { id: effect.value },
+      });
+
+      if (referrer) {
+        const pastPayments = await prisma.payment.findMany({
+          where: { userId: user.id, status: "success" },
+        });
+        const totalAmount = pastPayments.reduce((sum, payment) => sum + payment.amount, 0);
+        const totalCommission = totalAmount * referrer.referralRate;
+
+        await prisma.user.update({
+          where: { id: user.id },
+          data: { referredById: referrer.id },
+        });
+
+        if (totalCommission > 0) {
+          await prisma.user.update({
+            where: { id: referrer.id },
+            data: { referralBalance: { increment: totalCommission } },
+          });
+        }
+      }
+    }
+  }
+
+  await prisma.promoActivation.create({
+    data: { userId: user.id, promoCodeId: promo.id },
+  });
+
+  if (balanceAdded > 0) {
+    return `Промокод ${code} активирован. На баланс зачислено ${balanceAdded} ₽.`;
+  }
+
+  return `Промокод ${code} активирован.`;
+}
+
+/**
+ * Handles text messages for both guest and authenticated users.
+ *
+ * @param ctx Telegram context.
+ */
 export async function handleTextMessage(ctx: Context) {
   if (!ctx.message || !("text" in ctx.message)) return;
 
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
+  const text = ctx.message.text.trim();
   const user = await prisma.user.findUnique({
     where: { telegramId: BigInt(telegramId) },
   });
 
-  const text = ctx.message.text.trim();
-  const ADMIN_ID = process.env.TELEGRAM_ADMIN_CHAT_ID?.trim();
-
-  // 1. Handling users NOT linked to Telegram or shadow users from /start ref
   if (!user || user.login.startsWith("tg_")) {
-    const input = text;
     const targetUser = await prisma.user.findFirst({
       where: {
-        OR: [{ login: input }, { telegramLinkCode: input }],
+        OR: [{ login: text }, { telegramLinkCode: text }],
       },
     });
 
     if (!targetUser) {
-      if (input.length < 3 || input.length > 24) {
-        return ctx.reply(
-          "❌ Логин должен содержать от 3 до 24 символов.\n\n" +
-            "Если вы пытались войти, проверьте правильность введенного кода привязки.",
-        );
+      if (text.length < 3 || text.length > 24) {
+        await ctx.reply("Логин должен быть длиной от 3 до 24 символов.");
+        return;
       }
-
-      if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input)) {
-        return ctx.reply(
-          "❌ Логин не может быть email адресом. Придумайте уникальное имя пользователя.",
-        );
+      if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text)) {
+        await ctx.reply("Логин не должен быть email-адресом.");
+        return;
       }
-
-      if (!/^[a-zA-Z0-9_]+$/.test(input)) {
-        return ctx.reply(
-          "❌ Логин может содержать только латинские буквы, цифры и подчеркивания без пробелов.",
-        );
+      if (!/^[a-zA-Z0-9_]+$/.test(text)) {
+        await ctx.reply("Логин может содержать только латиницу, цифры и подчёркивания.");
+        return;
       }
 
       const tempPassword = crypto.randomBytes(4).toString("hex");
@@ -54,98 +212,57 @@ export async function handleTextMessage(ctx: Context) {
 
       try {
         const newUser = await prisma.$transaction(async (tx) => {
-          // Check for shadow user
-          const shadowUser = await tx.user.findUnique({
+          const shadow = await tx.user.findUnique({
             where: { telegramId: BigInt(telegramId) },
           });
+          const referredById = shadow?.tempReferrerId || null;
 
-          const finalReferredById = shadowUser?.tempReferrerId || null;
-
-          // If shadow user exists, we need to handle the unique login constraint
-          // If the shadow user's login is the temporary one, we can update it.
-          // Otherwise, we create a new one.
-          if (shadowUser && shadowUser.login.startsWith("tg_")) {
-            return await tx.user.update({
-              where: { id: shadowUser.id },
+          if (shadow && shadow.login.startsWith("tg_")) {
+            return tx.user.update({
+              where: { id: shadow.id },
               data: {
-                login: input,
-                passwordHash: passwordHash,
-                referralCode: referralCode,
-                referredById: finalReferredById,
-                tempReferrerId: null, // Clear temp
+                login: text,
+                passwordHash,
+                referralCode,
+                referredById,
+                tempReferrerId: null,
               },
             });
           }
 
-          return await tx.user.create({
+          return tx.user.create({
             data: {
-              login: input,
-              passwordHash: passwordHash,
-              referralCode: referralCode,
+              login: text,
+              passwordHash,
+              referralCode,
               telegramId: BigInt(telegramId),
-              referredById: finalReferredById,
+              referredById,
             },
           });
         });
 
-        // Notify referrer
-        if (newUser.referredById) {
-          const referrer = await prisma.user.findUnique({
-            where: { id: newUser.referredById },
-            select: { telegramId: true },
-          });
-          if (referrer?.telegramId) {
-            try {
-              await bot.telegram.sendMessage(
-                Number(referrer.telegramId),
-                `🤝 Пользователь <b>${newUser.login}</b> зарегистрировался по вашей ссылке!`,
-                { parse_mode: "HTML" },
-              );
-            } catch {}
-          }
-        }
-
-        return ctx.reply(
-          `🎉 <b>Аккаунт ${newUser.login} успешно создан!</b>\n\n` +
-            `Мы сгенерировали для вас пароль для доступа в личный кабинет на сайте:\n` +
-            `🔑 <b>Пароль:</b> <code>${tempPassword}</code>\n\n` +
-            `<i>(Вы сможете изменить его позже)</i>\n\n` +
-            `Для завершения регистрации и привязки Telegram, пожалуйста, ознакомьтесь с нашей Офертой и Политикой конфиденциальности.`,
+        await ctx.reply(
+          `🎉 <b>Аккаунт ${escapeHtml(newUser.login)} создан.</b>\n\n` +
+            `Пароль для сайта: <code>${escapeHtml(tempPassword)}</code>\n\n` +
+            `Ознакомьтесь с документами и подтвердите согласие.`,
           {
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: "📜 Публичная оферта", callback_data: "legal_offer" }],
-                [
-                  {
-                    text: "🔒 Политика конфиденциальности",
-                    callback_data: "legal_privacy",
-                  },
-                ],
-                [
-                  {
-                    text: "✅ Принять и войти",
-                    callback_data: `legal_accept_all:${newUser.id}`,
-                  },
-                ],
-              ],
-            },
             parse_mode: "HTML",
+            reply_markup: getLegalKeyboard(newUser.id),
           },
         );
-      } catch (err: any) {
-        if (err.code === "P2002") {
-          return ctx.reply(
-            "❌ Этот логин уже занят или код привязки недействителен. Пожалуйста, попробуйте другой логин.",
-          );
+        return;
+      } catch (error: any) {
+        if (error?.code === "P2002") {
+          await ctx.reply("Этот логин уже занят.");
+          return;
         }
-        console.error("Registration error:", err);
-        return ctx.reply(
-          "❌ Произошла ошибка при регистрации. Попробуйте позже.",
-        );
+        console.error("[registration] failed", error);
+        await ctx.reply("Не удалось завершить регистрацию.");
+        return;
       }
     }
 
-    if (targetUser.telegramId && targetUser.telegramId !== BigInt(telegramId)) {
+    if (!targetUser.telegramId || targetUser.telegramId !== BigInt(telegramId)) {
       await prisma.user.upsert({
         where: { telegramId: BigInt(telegramId) },
         update: { botState: `login_password:${targetUser.id}` },
@@ -157,593 +274,459 @@ export async function handleTextMessage(ctx: Context) {
           botState: `login_password:${targetUser.id}`,
         },
       });
-      return ctx.reply(
-        `🔑 Аккаунт <b>${targetUser.login}</b> уже привязан к другому Telegram.\n\n` +
-          "Для смены привязки на этот аккаунт, пожалуйста, введите <b>пароль</b> от вашего личного кабинета:",
-        { parse_mode: "HTML" },
-      );
-    }
-
-    // Existing user found but NOT linked to this TG yet (telegramId is null)
-    // We ask for password to verify ownership
-    if (!targetUser.telegramId) {
-      await prisma.user.upsert({
-        where: { telegramId: BigInt(telegramId) },
-        update: { botState: `login_password:${targetUser.id}` },
-        create: {
-          telegramId: BigInt(telegramId),
-          login: `tg_${telegramId}`,
-          passwordHash: "shadow",
-          referralCode: `ref_${telegramId}`,
-          botState: `login_password:${targetUser.id}`,
-        },
-      });
-      return ctx.reply(
-        `🔍 Аккаунт <b>${targetUser.login}</b> найден!\n\n` +
-          "Пожалуйста, введите <b>пароль</b> для подтверждения владения аккаунтом:",
-        { parse_mode: "HTML" },
-      );
-    }
-  }
-
-  // 2. Handling users ALREADY linked (State-based)
-  if (user && user.botState) {
-    const state = user.botState;
-
-    // Login via Password
-    if (state.startsWith("login_password:")) {
-      const targetUserId = state.split(":")[1];
-      const targetUser = await prisma.user.findUnique({
-        where: { id: targetUserId },
-      });
-
-      if (!targetUser) {
-        await prisma.user.update({
-          where: { id: user.id },
-          data: { botState: null },
-        });
-        return ctx.reply("❌ Произошла ошибка. Пользователь не найден.");
-      }
-
-      const isValid = await bcrypt.compare(text, targetUser.passwordHash);
-      if (!isValid) {
-        return ctx.reply(
-          "❌ Неверный пароль. Попробуйте еще раз или отправьте другой логин для регистрации:",
-        );
-      }
-
-      // Password is valid - proceed to legal agreement
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { botState: null },
-      });
-
-      return ctx.reply(
-        `✅ Пароль верный! Аккаунт <b>${targetUser.login}</b> подтвержден.\n\n` +
-          "Для завершения привязки ознакомьтесь с Офертой и Политикой конфиденциальности:",
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "📜 Публичная оферта", callback_data: "legal_offer" }],
-              [
-                {
-                  text: "🔒 Политика конфиденциальности",
-                  callback_data: "legal_privacy",
-                },
-              ],
-              [
-                {
-                  text: "✅ Принять и привязать",
-                  callback_data: `legal_accept_all:${targetUser.id}`,
-                },
-              ],
-            ],
-          },
-          parse_mode: "HTML",
-        },
-      );
-    }
-
-    // Admin: Search User
-    if (state === "admin_search_user" && telegramId.toString() === ADMIN_ID) {
-      const targetUser = await prisma.user.findFirst({
-        where: { login: { equals: text, mode: "insensitive" } },
-      });
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { botState: null },
-      });
-      if (!targetUser) return ctx.reply(`❌ Пользователь "${text}" не найден.`);
-
-      return ctx.reply(`🔍 Пользователь найден: **${targetUser.login}**`, {
-        reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: "👁 Перейти в профиль",
-                callback_data: `admin_user_view_${targetUser.id}`,
-              },
-            ],
-          ],
-        },
-        parse_mode: "Markdown",
-      });
-    }
-
-    // Admin: Edit Balance
-    if (
-      state.startsWith("admin_edit_balance:") &&
-      telegramId.toString() === ADMIN_ID
-    ) {
-      const targetId = state.split(":")[1];
-      const amount = parseFloat(text);
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { botState: null },
-      });
-
-      if (isNaN(amount)) return ctx.reply("❌ Введите корректное число.");
-
-      const updated = await prisma.user.update({
-        where: { id: targetId },
-        data: { balance: amount },
-      });
-
-      return ctx.reply(
-        `✅ Баланс пользователя **${updated.login}** изменен на **${amount} ₽**`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [
-                {
-                  text: "◀️ Вернуться к профилю",
-                  callback_data: `admin_user_view_${targetId}`,
-                },
-              ],
-            ],
-          },
-          parse_mode: "Markdown",
-        },
-      );
-    }
-
-    // Admin: Find Referrer for Recovery Promo (from main menu)
-    if (
-      state === "admin_find_referrer_for_recovery" &&
-      telegramId.toString() === ADMIN_ID
-    ) {
-      const targetUser = await prisma.user.findFirst({
-        where: { login: { equals: text.trim(), mode: "insensitive" } },
-      });
-
-      if (!targetUser) {
-        return ctx.reply(`❌ Пользователь с логином "${text}" не найден.`);
-      }
-
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { botState: `admin_gen_recovery_custom:${targetUser.id}` },
-      });
-
-      return ctx.reply(
-        `👤 **Пригласитель найден: ${targetUser.login}**\n\n` +
-          `Теперь введите желаемое название для промокода (обязательно должно начинаться с \`RECOVERY_\`):`,
-        { parse_mode: "Markdown" },
-      );
-    }
-
-    // Admin: Generate Custom Recovery Promo
-    if (
-      state.startsWith("admin_gen_recovery_custom:") &&
-      telegramId.toString() === ADMIN_ID
-    ) {
-      const referrerId = state.split(":")[1];
-      const promoName = text.trim();
-
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { botState: null },
-      });
-
-      if (!promoName.toUpperCase().startsWith("RECOVERY_")) {
-        return ctx.reply(
-          "❌ Название промокода должно начинаться с `RECOVERY_` (например, `RECOVERY_IVAN`).",
-          { parse_mode: "Markdown" },
-        );
-      }
-
-      // Check if code exists
-      const existing = await prisma.promoCode.findUnique({
-        where: { code: promoName },
-      });
-      if (existing) return ctx.reply("❌ Такой промокод уже существует.");
-
-      const referrer = await prisma.user.findUnique({
-        where: { id: referrerId },
-      });
-      if (!referrer) return ctx.reply("❌ Пригласитель не найден.");
-
-      await prisma.promoCode.create({
-        data: {
-          code: promoName,
-          maxActivations: 1, // Single-use for one "lost" referral
-          conditions: [],
-          effects: [
-            { key: "referrer_id", value: referrerId },
-            { key: "add_balance", value: "100" },
-          ],
-        },
-      });
-
-      return ctx.reply(
-        `✅ **Recovery-промо создан!**\n\n` +
-          `Code: \`${promoName}\`\n` +
-          `При приглашении привяжет к: **${referrer.login}**\n` +
-          `Бонус: **100 ₽**\n\n` +
-          `Отправьте этот код рефералу.`,
-        { parse_mode: "Markdown" },
-      );
-    }
-
-    // Admin: Edit Referral Balance
-    if (
-      state.startsWith("admin_edit_refbalance:") &&
-      telegramId.toString() === ADMIN_ID
-    ) {
-      const targetId = state.split(":")[1];
-      const amount = parseFloat(text);
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { botState: null },
-      });
-
-      if (isNaN(amount)) return ctx.reply("❌ Введите корректное число.");
-
-      const updated = await prisma.user.update({
-        where: { id: targetId },
-        data: { referralBalance: amount },
-      });
-
-      return ctx.reply(
-        `✅ РЕФЕРАЛЬНЫЙ баланс пользователя **${updated.login}** изменен на **${amount} ₽**`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [
-                {
-                  text: "◀️ Вернуться к профилю",
-                  callback_data: `admin_user_view_${targetId}`,
-                },
-              ],
-            ],
-          },
-          parse_mode: "Markdown",
-        },
-      );
-    }
-
-    // Admin: Reply to Support Ticket
-    if (
-      state.startsWith("admin_reply_ticket:") &&
-      telegramId.toString() === ADMIN_ID
-    ) {
-      const ticketId = state.split(":")[1];
-      const ticket = await prisma.supportTicket.findUnique({
-        where: { id: ticketId },
-        include: { user: true },
-      });
-      if (!ticket) return ctx.reply("❌ Тикет не найден.");
-
-      await prisma.supportTicket.update({
-        where: { id: ticketId },
-        data: { reply: text, status: "replied" },
-      });
-
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { botState: null },
-      });
-
-      try {
-        await bot.telegram.sendMessage(
-          Number(ticket.user.telegramId),
-          `💬 **Ответ от поддержки:**\n\n${text}`,
-          { parse_mode: "Markdown" },
-        );
-      } catch {}
-
-      return ctx.reply("✅ Ответ отправлен пользователю.");
-    }
-
-    // Admin: Broadcast
-    if (state === "admin_broadcast" && telegramId.toString() === ADMIN_ID) {
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { botState: null },
-      });
-
-      const users = await prisma.user.findMany({
-        where: { telegramId: { not: null } },
-      });
-
-      let success = 0;
-      for (const u of users) {
-        try {
-          await bot.telegram.sendMessage(Number(u.telegramId), text, {
-            parse_mode: "Markdown",
-          });
-          success++;
-        } catch {}
-      }
-      return ctx.reply(
-        `📢 Рассылка завершена. Успешно: ${success}/${users.length}`,
-      );
-    }
-
-    // User: Withdrawal Flow
-    if (state === "withdraw_1") {
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { botState: `withdraw_2:${text}` },
-      });
-      return ctx.reply(
-        "🏦 Шаг 2/3: Введите название вашего банка (например, Сбербанк, Тинькофф):",
-      );
-    }
-
-    if (state.startsWith("withdraw_2:")) {
-      const card = state.split(":")[1] || "";
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { botState: `withdraw_3:${card}:${text}` },
-      });
-      return ctx.reply("👤 Шаг 3/3: Введите ваше ФИО получателя:");
-    }
-
-    if (state.startsWith("withdraw_3:")) {
-      const parts = state.split(":");
-      const card = parts[1] || "";
-      const bank = parts[2] || "";
-      const fio = text;
-      const amount = user.referralBalance;
-
-      const request = await prisma.withdrawal.create({
-        data: {
-          userId: user.id,
-          amount,
-          target: `${card} (${fio})`,
-          bank,
-          status: "pending",
-        },
-      });
-
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { referralBalance: 0, botState: null },
-      });
-
       await ctx.reply(
-        `✅ **Заявка на вывод создана!**\n\n` +
-          `Сумма: **${amount} ₽**\n` +
-          `Реквизиты: ${card}\n` +
-          `Банк: ${bank}\n` +
-          `Получатель: ${fio}\n\n` +
-          `Ожидайте обработки администратором.`,
-        { parse_mode: "Markdown" },
+        `Аккаунт <b>${escapeHtml(targetUser.login)}</b> найден. Введите пароль для подтверждения привязки.`,
+        { parse_mode: "HTML" },
       );
-
-      if (ADMIN_ID) {
-        bot.telegram
-          .sendMessage(
-            ADMIN_ID,
-            `💸 **Новая заявка на вывод:**\n` +
-              `Пользователь: ${user.login}\n` +
-              `Сумма: ${amount} ₽\n` +
-              `Реквизиты: ${card}\n` +
-              `Банк: ${bank}\n` +
-              `ФИО: ${fio}\n` +
-              `ID: \`${request.id}\``,
-            { parse_mode: "Markdown" },
-          )
-          .catch(() => {});
-      }
       return;
     }
   }
 
-  // From here on, we need a valid user record
   if (!user) return;
 
-  // 3. Command & Numeric Parsing
-  const safeAdminId = ADMIN_ID || "";
-  if (text.toLowerCase() === "меню") {
-    let kb = getMainMenu().reply_markup.inline_keyboard;
-    if (user && telegramId.toString() === safeAdminId) {
-      kb = [...kb, [{ text: "🛠 Админ-панель", callback_data: "menu_admin" }]];
+  const decodedState = decodeBotState(user.botState);
+  if (decodedState) {
+    if (decodedState.key === "promo_enter_code") {
+      const message = await activatePromo(user, text);
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { botState: null },
+      });
+      await ctx.reply(message);
+      return;
     }
-    return ctx.reply("Выберите действие в меню:", {
-      reply_markup: { inline_keyboard: kb },
-    });
-  }
 
-  if (text.startsWith("/broadcast ") && telegramId.toString() === safeAdminId) {
-    const broadcastText = text.replace("/broadcast ", "");
-    const users = await prisma.user.findMany({
-      where: { telegramId: { not: null } },
-    });
-    let success = 0;
-    for (const u of users) {
-      try {
-        await bot.telegram.sendMessage(Number(u.telegramId), broadcastText, {
+    if (decodedState.key === "support_create_description") {
+      const subject = String(decodedState.payload.subject || "").trim();
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          botState: encodeBotState("support_create_confirm", {
+            subject,
+            description: text,
+          }),
+        },
+      });
+      await ctx.reply(formatTicketPreview({ subject, description: text }), {
+        parse_mode: "HTML",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "✅ Подтвердить", callback_data: "support_confirm" }],
+            [{ text: "❌ Отклонить", callback_data: "support_cancel" }],
+          ],
+        },
+      });
+      return;
+    }
+
+    if (decodedState.key === "admin_reply_ticket_preview") {
+      return;
+    }
+
+    if (decodedState.key === "admin_broadcast_message") {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          botState: encodeBotState("admin_broadcast_target", {
+            title: String(decodedState.payload.title || ""),
+            message: text,
+          }),
+        },
+      });
+      await ctx.reply(
+        "Выберите получателей рассылки.",
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "👥 Всем", callback_data: "admin_broadcast_target:all" }],
+              [{ text: "👤 Одному пользователю", callback_data: "admin_broadcast_target:user" }],
+            ],
+          },
+        },
+      );
+      return;
+    }
+
+    if (decodedState.key === "admin_broadcast_user") {
+      const targetUser = await prisma.user.findFirst({
+        where: { login: { equals: text, mode: "insensitive" } },
+      });
+      if (!targetUser?.telegramId) {
+        await ctx.reply("Пользователь не найден или Telegram не привязан.");
+        return;
+      }
+
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          botState: encodeBotState("admin_broadcast_schedule", {
+            ...decodedState.payload,
+            targetType: "user",
+            targetUserIds: [targetUser.id],
+            targetLogin: targetUser.login,
+          }),
+        },
+      });
+      await ctx.reply(
+        "Выберите время отправки.",
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "🚀 Отправить сразу", callback_data: "admin_broadcast_schedule:now" }],
+              [{ text: "🕒 Запланировать", callback_data: "admin_broadcast_schedule:later" }],
+            ],
+          },
+        },
+      );
+      return;
+    }
+
+    if (decodedState.key === "admin_broadcast_schedule_input") {
+      const scheduledAt = parseScheduleDate(text);
+      if (!scheduledAt || scheduledAt <= new Date()) {
+        await ctx.reply("Введите будущую дату в формате `ДД.ММ.ГГГГ ЧЧ:ММ`.", {
           parse_mode: "Markdown",
         });
-        success++;
-      } catch {}
+        return;
+      }
+
+      const payload: Record<string, unknown> = {
+        ...decodedState.payload,
+        scheduledAt: scheduledAt.toISOString(),
+      };
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { botState: encodeBotState("admin_broadcast_confirm", payload) },
+      });
+
+      await ctx.reply(
+        `📢 <b>Предпросмотр рассылки</b>\n\n` +
+          `<b>Тема:</b> ${escapeHtml(String(payload.title || ""))}\n` +
+          `<b>Получатели:</b> ${payload.targetType === "user" ? escapeHtml(String(payload.targetLogin || "")) : "все пользователи"}\n` +
+          `<b>Время:</b> ${escapeHtml(new Date(String(payload.scheduledAt)).toLocaleString("ru-RU"))}\n\n` +
+          `${escapeHtml(String(payload.message || ""))}`,
+        {
+          parse_mode: "HTML",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "✅ Сохранить", callback_data: "admin_broadcast_confirm" }],
+              [{ text: "❌ Отменить", callback_data: "admin_broadcast_cancel" }],
+            ],
+          },
+        },
+      );
+      return;
     }
-    return ctx.reply(
-      `📢 Рассылка завершена. Успешно: ${success}/${users.length}`,
-    );
+
+    if (decodedState.key === "admin_promo_condition_value") {
+      const draft = decodedState.payload.draft as any;
+      const type = String(decodedState.payload.type || "");
+      const nextConditions = [...(draft.conditions || []), { key: type, value: text }];
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          botState: encodeBotState("admin_promo_create_conditions", {
+            ...draft,
+            conditions: nextConditions,
+          }),
+        },
+      });
+      await ctx.reply("Условие добавлено.", {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "➕ Добавить условие", callback_data: "admin_promo_conditions_menu" }],
+            [{ text: "✅ Подтвердить условия", callback_data: "admin_promo_conditions_done" }],
+          ],
+        },
+      });
+      return;
+    }
+
+    if (decodedState.key === "admin_promo_effect_value") {
+      const draft = decodedState.payload.draft as any;
+      const type = String(decodedState.payload.type || "");
+      const nextEffects = [...(draft.effects || []), { key: type, value: text }];
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          botState: encodeBotState("admin_promo_create_effects", {
+            ...draft,
+            effects: nextEffects,
+          }),
+        },
+      });
+      await ctx.reply("Эффект добавлен.", {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "➕ Добавить эффект", callback_data: "admin_promo_effects_menu" }],
+            [{ text: "✅ Завершить создание", callback_data: "admin_promo_preview" }],
+          ],
+        },
+      });
+      return;
+    }
   }
 
-  if (
-    text.startsWith("/create_promo ") &&
-    telegramId.toString() === safeAdminId
-  ) {
-    const parts = text.split(" ");
-    if (parts.length < 4)
-      return ctx.reply("❌ Формат: `/create_promo <rate_0.XX> <CODE> <limit>`");
+  if (user.botState) {
+    if (user.botState.startsWith("login_password:")) {
+      const targetUserId = user.botState.split(":")[1];
+      const targetUser = await prisma.user.findUnique({ where: { id: targetUserId } });
+      if (!targetUser) {
+        await prisma.user.update({ where: { id: user.id }, data: { botState: null } });
+        await ctx.reply("Пользователь не найден.");
+        return;
+      }
 
-    const rateStr = parts[1] || "0";
-    let rate = parseFloat(rateStr);
-    const code = (parts[2] || "PROMO").toUpperCase();
-    const limitStr = parts[3] || "0";
-    const limit = parseInt(limitStr);
+      const valid = await bcrypt.compare(text, targetUser.passwordHash);
+      if (!valid) {
+        await ctx.reply("Неверный пароль. Попробуйте ещё раз.");
+        return;
+      }
 
-    if (isNaN(rate) || isNaN(limit)) return ctx.reply("❌ Некорректные числа.");
+      await prisma.user.update({ where: { id: user.id }, data: { botState: null } });
+      await ctx.reply(
+        `Пароль верный. Осталось подтвердить документы для аккаунта <b>${escapeHtml(targetUser.login)}</b>.`,
+        {
+          parse_mode: "HTML",
+          reply_markup: getLegalKeyboard(targetUser.id),
+        },
+      );
+      return;
+    }
 
-    // Smart rate detection: 30 -> 0.3, but 0.3 stays 0.3
-    if (rate >= 1) rate = rate / 100;
+    if (user.botState === "admin_search_user" && telegramId.toString() === ADMIN_ID) {
+      const targetUser = await prisma.user.findFirst({
+        where: { login: { equals: text, mode: "insensitive" } },
+      });
+      await prisma.user.update({ where: { id: user.id }, data: { botState: null } });
+      if (!targetUser) {
+        await ctx.reply("Пользователь не найден.");
+        return;
+      }
+      await ctx.reply(`Пользователь найден: ${targetUser.login}`, {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "👁 Открыть", callback_data: `admin_user_view_${targetUser.id}` }],
+          ],
+        },
+      });
+      return;
+    }
 
-    await prisma.promoCode.create({
-      data: {
-        code,
-        maxActivations: limit,
-        conditions: [],
-        effects: [{ key: "set_referral_rate", value: rate.toString() }],
-      },
+    if (user.botState.startsWith("admin_edit_balance:") && telegramId.toString() === ADMIN_ID) {
+      const targetId = user.botState.split(":")[1];
+      const amount = Number(text);
+      if (Number.isNaN(amount)) {
+        await ctx.reply("Введите корректное число.");
+        return;
+      }
+      await prisma.user.update({ where: { id: user.id }, data: { botState: null } });
+      await prisma.user.update({ where: { id: targetId }, data: { balance: amount } });
+      await ctx.reply("Баланс обновлён.");
+      return;
+    }
+
+    if (user.botState.startsWith("admin_edit_refbalance:") && telegramId.toString() === ADMIN_ID) {
+      const targetId = user.botState.split(":")[1];
+      const amount = Number(text);
+      if (Number.isNaN(amount)) {
+        await ctx.reply("Введите корректное число.");
+        return;
+      }
+      await prisma.user.update({ where: { id: user.id }, data: { botState: null } });
+      await prisma.user.update({
+        where: { id: targetId },
+        data: { referralBalance: amount },
+      });
+      await ctx.reply("Реферальный баланс обновлён.");
+      return;
+    }
+
+    if (user.botState === "admin_find_referrer_for_recovery" && telegramId.toString() === ADMIN_ID) {
+      const referrer = await prisma.user.findFirst({
+        where: { login: { equals: text, mode: "insensitive" } },
+      });
+      if (!referrer) {
+        await ctx.reply("Пользователь не найден.");
+        return;
+      }
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { botState: `admin_gen_recovery_custom:${referrer.id}` },
+      });
+      await ctx.reply(
+        `Пригласивший найден: ${referrer.login}. Введите код промокода, например RECOVERY_${generatePromoSuffix()}.`,
+      );
+      return;
+    }
+
+    if (user.botState.startsWith("admin_gen_recovery_custom:") && telegramId.toString() === ADMIN_ID) {
+      const referrerId = user.botState.split(":")[1];
+      const code = text.toUpperCase();
+      if (!code.startsWith("RECOVERY_")) {
+        await ctx.reply("Код должен начинаться с RECOVERY_.");
+        return;
+      }
+
+      if (!referrerId) {
+        await ctx.reply("Не удалось определить пригласившего.");
+        return;
+      }
+      await createRecoveryPromo(referrerId, code);
+      await prisma.user.update({ where: { id: user.id }, data: { botState: null } });
+      await ctx.reply(`Recovery-промокод ${code} создан.`);
+      return;
+    }
+
+    if (user.botState.startsWith("admin_reply_ticket:") && telegramId.toString() === ADMIN_ID) {
+      const ticketId = user.botState.split(":")[1];
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          botState: encodeBotState("admin_reply_ticket_preview", {
+            ticketId,
+            message: text,
+          }),
+        },
+      });
+      await ctx.reply(
+        `💬 <b>Предпросмотр ответа</b>\n\n${escapeHtml(text)}`,
+        {
+          parse_mode: "HTML",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "✅ Отправить", callback_data: "admin_ticket_reply_confirm" }],
+              [{ text: "❌ Отменить", callback_data: "admin_ticket_reply_cancel" }],
+            ],
+          },
+        },
+      );
+      return;
+    }
+
+    if (user.botState === "withdraw_1") {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { botState: `withdraw_2:${text}` },
+      });
+      await ctx.reply("Шаг 2/3. Введите название банка.");
+      return;
+    }
+
+    if (user.botState.startsWith("withdraw_2:")) {
+      const target = user.botState.split(":")[1];
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { botState: `withdraw_3:${target}:${text}` },
+      });
+      await ctx.reply("Шаг 3/3. Введите ФИО получателя.");
+      return;
+    }
+
+    if (user.botState.startsWith("withdraw_3:")) {
+      const [, target = "", bank = ""] = user.botState.split(":");
+      const amount = user.referralBalance;
+      const request = await prisma.withdrawal.create({
+        data: {
+          userId: user.id,
+          amount,
+          target: `${target} (${text})`,
+          bank,
+        },
+      });
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { referralBalance: 0, botState: null },
+      });
+      await ctx.reply(`Заявка на вывод ${amount} ₽ создана. ID: ${request.id}`);
+      return;
+    }
+
+    if (user.botState === "admin_broadcast_title" && telegramId.toString() === ADMIN_ID) {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          botState: encodeBotState("admin_broadcast_message", { title: text }),
+        },
+      });
+      await ctx.reply("Введите текст рассылки.");
+      return;
+    }
+
+    if (user.botState === "admin_promo_create_code" && telegramId.toString() === ADMIN_ID) {
+      const code = text.trim().toUpperCase();
+      const existing = await prisma.promoCode.findUnique({ where: { code } });
+      if (existing) {
+        await ctx.reply("Такой промокод уже существует.");
+        return;
+      }
+
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          botState: encodeBotState("admin_promo_create_conditions", {
+            code,
+            conditions: [],
+            effects: [],
+          }),
+        },
+      });
+      await ctx.reply(
+        `Код ${code} принят. Теперь сформируйте список условий.`,
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "➕ Добавить условие", callback_data: "admin_promo_conditions_menu" }],
+              [{ text: "✅ Без условий", callback_data: "admin_promo_conditions_done" }],
+            ],
+          },
+        },
+      );
+      return;
+    }
+
+    if (user.botState === "support_create_subject") {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          botState: encodeBotState("support_create_description", {
+            subject: text,
+          }),
+        },
+      });
+      await ctx.reply("Опишите проблему подробно.");
+      return;
+    }
+  }
+
+  if (text.toLowerCase() === "меню") {
+    let keyboard = getMainMenu().reply_markup.inline_keyboard;
+    if (telegramId.toString() === ADMIN_ID) {
+      keyboard = [...keyboard, [{ text: "🛠 Админ-панель", callback_data: "menu_admin" }]];
+    }
+    await ctx.reply("Выберите действие:", {
+      reply_markup: { inline_keyboard: keyboard },
     });
-    return ctx.reply(
-      `✅ Промокод **${code}** создан. Реф. ставка: **${rate * 100}%**`,
-    );
+    return;
   }
 
   if (text.startsWith("/promo ")) {
-    const code = text.replace("/promo ", "").trim().toUpperCase();
-    const promo = await prisma.promoCode.findUnique({ where: { code } });
-    if (!promo) return ctx.reply("❌ Промокод не найден.");
-
-    const activation = await prisma.promoActivation.findUnique({
-      where: { userId_promoCodeId: { userId: user.id, promoCodeId: promo.id } },
-    });
-    if (activation) return ctx.reply("❌ Вы уже активировали этот промокод.");
-
-    const count = await prisma.promoActivation.count({
-      where: { promoCodeId: promo.id },
-    });
-    if (promo.maxActivations && count >= promo.maxActivations)
-      return ctx.reply("❌ Лимит активаций исчерпан.");
-
-    // Apply effects
-    let balanceAdded = 0;
-    const effects = promo.effects as any[];
-    for (const effect of effects) {
-      if (effect.key === "set_referral_rate") {
-        await prisma.user.update({
-          where: { id: user.id },
-          data: { referralRate: parseFloat(effect.value) },
-        });
-      }
-      if (effect.key === "add_balance") {
-        const amount = parseFloat(effect.value);
-        if (!isNaN(amount) && amount > 0) {
-          balanceAdded += amount;
-          await prisma.user.update({
-            where: { id: user.id },
-            data: { balance: { increment: amount } },
-          });
-          await prisma.transaction.create({
-            data: {
-              userId: user.id,
-              type: "promo_topup",
-              amount: amount,
-              title: `Активация промокода ${code}`,
-            },
-          });
-        }
-      }
-      if (effect.key === "referrer_id") {
-        if (!user.referredById) {
-          const referrerId = effect.value;
-          const referrer = await prisma.user.findUnique({
-            where: { id: referrerId },
-          });
-
-          if (referrer) {
-            // Find all past successful payments of this user
-            const pastPayments = await prisma.payment.findMany({
-              where: { userId: user.id, status: "success" },
-            });
-
-            const totalAmount = pastPayments.reduce((s, p) => s + p.amount, 0);
-            const totalCommission = totalAmount * referrer.referralRate;
-
-            await prisma.user.update({
-              where: { id: user.id },
-              data: { referredById: referrerId },
-            });
-
-            if (totalCommission > 0) {
-              await prisma.user.update({
-                where: { id: referrerId },
-                data: { referralBalance: { increment: totalCommission } },
-              });
-
-              await prisma.transaction.create({
-                data: {
-                  userId: referrerId,
-                  type: "referral_commission",
-                  amount: totalCommission,
-                  title: `Ретроактивный бонус за реферала ${user.login} (${totalAmount} ₽)`,
-                },
-              });
-
-              // Notify referrer if possible
-              if (referrer.telegramId) {
-                try {
-                  await bot.telegram.sendMessage(
-                    Number(referrer.telegramId),
-                    `🤝 **Реферальное восстановление!**\n\n` +
-                      `Ваш партнер **${user.login}** успешно привязан к вам.\n` +
-                      `Вам начислено **${totalCommission.toFixed(2)} ₽** комиссии за его прошлые пополнения!`,
-                    { parse_mode: "Markdown" },
-                  );
-                } catch {}
-              }
-            }
-          }
-        }
-      }
-    }
-
-    await prisma.promoActivation.create({
-      data: { userId: user.id, promoCodeId: promo.id },
-    });
-
-    if (balanceAdded > 0) {
-      return ctx.reply(
-        `✅ Промокод **${code}** успешно активирован!\n\nНа ваш баланс начислено **${balanceAdded} ₽**.`,
-      );
-    } else {
-      return ctx.reply(`✅ Промокод **${code}** успешно активирован!`);
-    }
+    const message = await activatePromo(user, text.replace("/promo ", ""));
+    await ctx.reply(message);
+    return;
   }
 
-  // Handle number input (Topup balance)
-  const amountToTopup = parseFloat(text);
-  if (
-    !isNaN(amountToTopup) &&
-    amountToTopup >= 100 &&
-    amountToTopup <= 100000
-  ) {
+  const amountToTopup = Number(text);
+  if (!Number.isNaN(amountToTopup) && amountToTopup >= 100 && amountToTopup <= 100000) {
     const sbp = getSbpClient();
     try {
       const payment = await sbp.createSBP({
-        amount: amountToTopup * 100, // В копейках
+        amount: amountToTopup * 100,
         merchantId: process.env.TOCHKA_MERCHANT_ID || "",
         accountId: process.env.TOCHKA_ACCOUNT_ID || "",
         description: `Пополнение баланса (User: ${user.login})`,
         qrcType: "DYNAMIC",
-        ttl: 30 * 60, // 30 минут
+        ttl: 30 * 60,
       });
 
       await prisma.payment.create({
@@ -752,36 +735,47 @@ export async function handleTextMessage(ctx: Context) {
           userId: user.id,
           amount: amountToTopup,
           status: "pending",
-          qrUrl: payment.imageBase64 || "", // Сохраняем QR картинку если есть
+          qrUrl: payment.imageBase64 || "",
           sbpUrl: payment.payUrl,
-          expiresAt: new Date(Date.now() + 30 * 60 * 1000), // 30 mins
+          expiresAt: new Date(Date.now() + 30 * 60 * 1000),
         },
       });
 
-      return ctx.reply(
-        `💳 **Сумма к пополнению: ${amountToTopup} ₽**\n\nДля оплаты перейдите по ссылке (СБП):`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "🔗 Оплатить через СБП", url: payment.payUrl }],
-              [
-                {
-                  text: "🔄 Проверить оплату",
-                  callback_data: `check_payment_${payment.qrcId}`,
-                },
-              ],
-            ],
-          },
-          parse_mode: "Markdown",
+      await ctx.reply(`Сумма к оплате: ${amountToTopup} ₽`, {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "🔗 Оплатить через СБП", url: payment.payUrl }],
+            [{ text: "🔄 Проверить оплату", callback_data: `check_payment_${payment.qrcId}` }],
+          ],
         },
-      );
-    } catch (err) {
-      console.error("Topup error:", err);
-      return ctx.reply("❌ Ошибка при создании счета. Попробуйте позже.");
+      });
+      return;
+    } catch (error) {
+      console.error("[topup] failed", error);
+      await ctx.reply("Не удалось создать счёт на оплату.");
+      return;
     }
   }
 
-  return ctx.reply(
-    "❓ Я вас не понимаю. Используйте меню или введите корректное число для пополнения.",
+  if (telegramId.toString() === ADMIN_ID && text.startsWith("/broadcast ")) {
+    const mailingText = text.slice("/broadcast ".length);
+    const users = await prisma.user.findMany({
+      where: { telegramId: { not: null } },
+    });
+    let success = 0;
+    for (const item of users) {
+      try {
+        await bot.telegram.sendMessage(Number(item.telegramId), mailingText, {
+          parse_mode: "HTML",
+        });
+        success += 1;
+      } catch {}
+    }
+    await ctx.reply(`Рассылка выполнена: ${success}/${users.length}`);
+    return;
+  }
+
+  await ctx.reply(
+    "Не понял сообщение. Используйте меню, отправьте сумму пополнения или выполните текущий шаг сценария.",
   );
 }

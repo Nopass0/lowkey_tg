@@ -87,13 +87,19 @@ async function checkSubscriptions() {
 
 async function attemptAutoRenewal(subscription: any) {
   const user = subscription.user;
-  // Assume monthly renewal for simplicity, or look up the last period from transactions (default to monthly)
   const period = "monthly";
-  const plan = PLANS.find((p) => p.id === subscription.planId) || PLANS[0];
+  const fallbackPlan = PLANS[0];
+  const plan = PLANS.find((p) => p.id === subscription.planId) || fallbackPlan;
+  if (!plan) return;
+
+  const durationDays = PERIOD_DAYS[period];
   const price = (plan.prices as any)[period];
+  if (typeof price !== "number" || typeof durationDays !== "number") {
+    return;
+  }
 
   if (user.balance >= price) {
-    const durationMs = PERIOD_DAYS[period] * 24 * 60 * 60 * 1000;
+    const durationMs = durationDays * 24 * 60 * 60 * 1000;
     const newUntil = new Date(subscription.activeUntil.getTime() + durationMs);
 
     await prisma.$transaction(async (tx) => {
