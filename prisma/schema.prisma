@@ -38,6 +38,7 @@ model User {
   devices                   Device[]
   finance_withdrawals       finance_withdrawals[]
   payments                  Payment[]
+  paymentMethods            PaymentMethod[]
   promoActivations          PromoActivation[]
   subscription              Subscription?
   supportTickets            SupportTicket[]
@@ -52,16 +53,21 @@ model User {
 }
 
 model SubscriptionPlan {
-  id        String              @id @default(uuid())
-  slug      String              @unique
-  name      String
-  features  String[]
-  isPopular Boolean             @default(false)
-  isActive  Boolean             @default(true)
-  sortOrder Int                 @default(0)
-  createdAt DateTime            @default(now())
-  updatedAt DateTime            @updatedAt
-  prices    SubscriptionPrice[]
+  id           String              @id @default(uuid())
+  slug         String              @unique
+  name         String
+  features     String[]
+  isPopular    Boolean             @default(false)
+  isActive     Boolean             @default(true)
+  sortOrder    Int                 @default(0)
+  promoActive  Boolean             @default(false)
+  promoPrice   Float?
+  promoLabel   String?
+  promoMaxUses Int?
+  promoUsed    Int                 @default(0)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  prices       SubscriptionPrice[]
 
   @@map("subscription_plans")
 }
@@ -87,6 +93,8 @@ model Subscription {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   autoRenewal Boolean  @default(true)
+  billingPeriod String @default("monthly")
+  autoRenewPaymentMethodId String?
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("subscriptions")
@@ -98,6 +106,8 @@ model Transaction {
   type      String
   amount    Float
   title     String
+  isTest    Boolean  @default(false)
+  paymentId String?
   createdAt DateTime @default(now())
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -106,19 +116,59 @@ model Transaction {
 }
 
 model Payment {
-  id           String   @id @default(uuid())
-  userId       String
-  sbpPaymentId String   @unique
-  amount       Float
-  status       String   @default("pending")
-  qrUrl        String
-  sbpUrl       String
-  createdAt    DateTime @default(now())
-  expiresAt    DateTime
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id               String   @id @default(uuid())
+  userId           String
+  sbpPaymentId     String?  @unique
+  yokassaPaymentId String?  @unique
+  amount           Float
+  status           String   @default("pending")
+  qrUrl            String?
+  sbpUrl           String?
+  provider         String   @default("tochka")
+  paymentType      String?
+  confirmationUrl  String?
+  description      String?
+  metadata         Json?
+  isTest           Boolean  @default(false)
+  creditedAt       DateTime?
+  refundedAt       DateTime?
+  refundAmount     Float?
+  refundReason     String?
+  createdAt        DateTime @default(now())
+  expiresAt        DateTime @default(dbgenerated("NOW() + INTERVAL '30 minutes'"))
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@map("payments")
+}
+
+model PaymentMethod {
+  id                String   @id @default(uuid())
+  userId            String
+  yokassaMethodId   String   @unique
+  type              String   @default("bank_card")
+  title             String
+  cardLast4         String?
+  cardBrand         String?
+  cardExpMonth      Int?
+  cardExpYear       Int?
+  isDefault         Boolean  @default(false)
+  allowAutoCharge   Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("payment_methods")
+}
+
+model YokassaSettings {
+  id                      String   @id @default("global")
+  mode                    String   @default("test")
+  testSubscriptionEnabled Boolean  @default(false)
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  @@map("yokassa_settings")
 }
 
 model Device {
@@ -307,6 +357,7 @@ model ai_settings {
   systemPrompt         String?
   maxContextMessages   Int      @default(14)
   enableReasoning      Boolean  @default(true)
+  hideAiMenuForAll     Boolean  @default(false)
   createdAt            DateTime @default(now())
   updatedAt            DateTime
 }
