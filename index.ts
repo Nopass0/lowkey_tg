@@ -1,7 +1,7 @@
 import { bot } from "./src/utils/bot";
 import { prisma } from "./src/utils/prisma";
 import { handleStart } from "./src/commands/start";
-import { handleTextMessage } from "./src/commands/textHandler";
+import { handleTextMessageWithSiteBilling } from "./src/commands/textHandlerSite";
 import {
   handleMenuMain,
   handleMenuProfile,
@@ -10,11 +10,11 @@ import {
   handleMenuSupport,
   handleMenuTariffPeriods,
   handleMenuTariffs,
-  handleMenuTopup,
   handleMenuVpn,
   handleToggleAutoRenewal,
   handleLogout,
 } from "./src/actions/menus";
+import { handleMenuTopupViaSite } from "./src/actions/siteBilling";
 import {
   handleHowToAndroid,
   handleHowToConnect,
@@ -25,19 +25,25 @@ import {
 import { handleBuyPlan } from "./src/actions/buyPlan";
 import { onPaymentSuccess, getSbpClient, startPaymentWorker, processPaymentSuccess } from "./src/utils/sbp";
 import { startSubscriptionWorker } from "./src/utils/subscriptionWorker";
+import { tryCompletePendingSubscriptionPurchase } from "./src/utils/subscriptionPurchase";
 import {
   handleAdminBroadcast,
-  handleAdminMenu,
   handleAdminPromoAction,
   handleAdminPromos,
   handleAdminTicketAction,
   handleAdminTickets,
   handleAdminUserAction,
+  handleAdminUserReferrals,
+  handleAdminUserTransactions,
   handleAdminUserView,
   handleAdminUsers,
   handleAdminWithdrawalAction,
   handleAdminWithdrawals,
 } from "./src/actions/admin";
+import {
+  handleAdminMenuWithPayments,
+  handleAdminPaymentsAction,
+} from "./src/actions/adminPayments";
 import {
   handleAdminBroadcastFlow,
   handleAdminPromoBuilderAction,
@@ -85,7 +91,7 @@ bot.action("menu_tariffs", handleMenuTariffs);
 bot.action("menu_promo", handleMenuPromo);
 bot.action("menu_referral", handleMenuReferral);
 bot.action("menu_support", handleMenuSupport);
-bot.action("menu_topup", handleMenuTopup);
+bot.action("menu_topup", handleMenuTopupViaSite);
 bot.action("toggle_auto_renewal", handleToggleAutoRenewal);
 bot.action("logout", handleLogout);
 bot.action("menu_withdraw", async (ctx) => {
@@ -99,9 +105,13 @@ bot.action(/^support_view:(.+):(\d+):(open|closed)$/, handleSupportAction);
 bot.action("support_confirm", handleSupportAction);
 bot.action("support_cancel", handleSupportAction);
 
-bot.action("menu_admin", handleAdminMenu);
+bot.action("menu_admin", handleAdminMenuWithPayments);
+bot.action("admin_payments", handleAdminPaymentsAction);
+bot.action(/^admin_payments_.+$/, handleAdminPaymentsAction);
 bot.action(/^admin_users_(\d+)$/, handleAdminUsers);
 bot.action(/^admin_user_view_(.+)$/, handleAdminUserView);
+bot.action(/^admin_user_referrals_(.+)_(\d+)$/, handleAdminUserReferrals);
+bot.action(/^admin_user_transactions_(.+)_(\d+)$/, handleAdminUserTransactions);
 bot.action(/^admin_user_(.+)$/, handleAdminUserAction);
 bot.action(/^admin_add_sub_(.+)$/, handleAdminUserAction);
 
@@ -238,7 +248,7 @@ bot.action(/^check_payment_(.+)$/, async (ctx) => {
   }
 });
 
-bot.on("text", handleTextMessage);
+bot.on("text", handleTextMessageWithSiteBilling);
 
 onPaymentSuccess(async ({ userId, amount, referrerId, commission }) => {
   try {
@@ -248,6 +258,19 @@ onPaymentSuccess(async ({ userId, amount, referrerId, commission }) => {
         Number(user.telegramId),
         `✅ Ваш платёж на ${amount} ₽ получен.`,
       ).catch(() => {});
+
+      const purchaseResult = await tryCompletePendingSubscriptionPurchase(userId);
+      if (purchaseResult?.ok) {
+        await bot.telegram.sendMessage(
+          Number(user.telegramId),
+          `✅ Подписка "${purchaseResult.plan.name}" автоматически оформлена до ${purchaseResult.newActiveUntil.toLocaleDateString("ru-RU")}.`,
+        ).catch(() => {});
+      } else if (purchaseResult && !purchaseResult.ok && purchaseResult.reason === "insufficient_balance") {
+        await bot.telegram.sendMessage(
+          Number(user.telegramId),
+          `Платёж зачислен, но для тарифа всё ещё не хватает ${purchaseResult.shortfall ?? 0} ₽.`,
+        ).catch(() => {});
+      }
     }
 
     if (referrerId && commission > 0) {
@@ -268,9 +291,14 @@ startSubscriptionWorker();
 startPaymentWorker();
 startMailingWorker();
 
-bot.launch().then(() => {
-  console.log("Bot started");
-});
+bot
+  .launch()
+  .then(() => {
+    console.log("Bot started");
+  })
+  .catch((error) => {
+    console.error("[bot.launch] failed", error);
+  });
 
 process.once("SIGINT", () => {
   bot.stop("SIGINT");

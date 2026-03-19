@@ -1,8 +1,10 @@
 import { TochkaSBP } from "tochka-sbp";
 import { prisma } from "./prisma";
+import { getEffectiveReferralRate } from "./referrals";
 
 let sbpClient: TochkaSBP | null = null;
 const listeners: ((data: any) => void | Promise<void>)[] = [];
+let paymentTickInProgress = false;
 
 export function getSbpClient(): TochkaSBP {
   if (!sbpClient) {
@@ -62,7 +64,7 @@ export async function processPaymentSuccess(
           select: { referralRate: true },
         });
 
-        const rate = referrer?.referralRate ?? 0.2;
+        const rate = getEffectiveReferralRate(referrer?.referralRate);
         const commission = amount * rate;
 
         await tx.user.update({
@@ -93,7 +95,9 @@ export async function processPaymentSuccess(
           userId,
           amount,
           referrerId: referrer?.id,
-          commission: referrer ? amount * referrer.referralRate : 0,
+          commission: referrer
+            ? amount * getEffectiveReferralRate(referrer.referralRate)
+            : 0,
         });
       } catch (e) {
         console.error("Error in onPaymentSuccess listener:", e);
@@ -110,6 +114,11 @@ export async function processPaymentSuccess(
 export function startPaymentWorker() {
   console.log("💳 Starting Payment Polling Worker...");
   setInterval(async () => {
+    if (paymentTickInProgress) {
+      return;
+    }
+
+    paymentTickInProgress = true;
     try {
       // 1. Process pending payments
       const pendingPayments = await prisma.payment.findMany({
@@ -120,6 +129,10 @@ export function startPaymentWorker() {
       const sbp = getSbpClient();
       for (const payment of pendingPayments) {
         try {
+          if (!payment.sbpPaymentId) {
+            continue;
+          }
+
           // Status check using tochka-sbp
           let statusData: any;
           try {
@@ -186,9 +199,15 @@ export function startPaymentWorker() {
         console.log(
           "💳 Payment Polling Worker: Database connection lost, retrying in next cycle...",
         );
+      } else if (err.message?.includes("Timed out fetching a new connection")) {
+        console.log(
+          "💳 Payment Polling Worker: Connection pool exhausted, retrying in next cycle...",
+        );
       } else {
         console.error("💳 Payment Polling Worker error:", err);
       }
+    } finally {
+      paymentTickInProgress = false;
     }
   }, 30000); // Check every 30 seconds
 }
