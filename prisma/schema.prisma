@@ -165,6 +165,7 @@ model YokassaSettings {
   id                      String   @id @default("global")
   mode                    String   @default("test")
   testSubscriptionEnabled Boolean  @default(false)
+  sbpProvider             String   @default("tochka")
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
 
