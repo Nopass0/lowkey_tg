@@ -8,34 +8,43 @@ datasource db {
 }
 
 model User {
-  id                        String            @id @default(uuid())
-  login                     String            @unique
+  id                        String                @id @default(uuid())
+  login                     String                @unique
   passwordHash              String
-  balance                   Float             @default(0)
-  referralBalance           Float             @default(0)
-  isBanned                  Boolean           @default(false)
-  isAdmin                   Boolean           @default(false)
-  referralCode              String            @unique
+  balance                   Float                 @default(0)
+  referralBalance           Float                 @default(0)
+  isBanned                  Boolean               @default(false)
+  isAdmin                   Boolean               @default(false)
+  hideAiMenu                Boolean               @default(false)
+  referralCode              String                @unique
   referredById              String?
-  joinedAt                  DateTime          @default(now())
-  pendingDiscountFixed      Float             @default(0)
-  pendingDiscountPct        Float             @default(0)
+  joinedAt                  DateTime              @default(now())
+  pendingDiscountFixed      Float                 @default(0)
+  pendingDiscountPct        Float                 @default(0)
   botLoginCode              String?
   botLoginCodeExpiresAt     DateTime?
-  telegramId                BigInt?           @unique
-  telegramLinkCode          String?           @unique
+  telegramId                BigInt?               @unique
+  telegramLinkCode          String?               @unique
   telegramLinkCodeExpiresAt DateTime?
-  botState                  String? // For managing interactive flows (e.g., "admin_search_user", "withdraw_step_1")
-  tempReferrerId            String? // temporary storage for referral link between /start and link
-  referralRate              Float             @default(0.2)
+  referralRate              Float                 @default(0.05)
+  botState                  String?
+  tempReferrerId            String?
+  aiFreeTokensUsed          Int                   @default(0)
+  aiPurchasedTokens         Int                   @default(0)
+  ai_conversations          ai_conversations[]
+  ai_files                  ai_files[]
+  ai_subscriptions          ai_subscriptions?
+  ai_usage_entries          ai_usage_entries[]
   devices                   Device[]
+  finance_withdrawals       finance_withdrawals[]
   payments                  Payment[]
   promoActivations          PromoActivation[]
   subscription              Subscription?
   supportTickets            SupportTicket[]
+  telegram_mailings         telegram_mailings[]
   transactions              Transaction[]
-  referredBy                User?             @relation("Referrals", fields: [referredById], references: [id])
-  referrals                 User[]            @relation("Referrals")
+  referredBy                User?                 @relation("Referrals", fields: [referredById], references: [id])
+  referrals                 User[]                @relation("Referrals")
   vpnTokens                 VpnToken[]
   withdrawals               Withdrawal[]
 
@@ -224,4 +233,159 @@ model VpnToken {
 
   @@unique([userId, deviceId])
   @@map("vpn_tokens")
+}
+
+model ai_conversations {
+  id               String             @id
+  userId           String
+  title            String
+  model            String?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime
+  users            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ai_files         ai_files[]
+  ai_messages      ai_messages[]
+  ai_usage_entries ai_usage_entries[]
+
+  @@index([userId, updatedAt])
+}
+
+model ai_files {
+  id               String            @id
+  userId           String
+  conversationId   String?
+  messageId        String?
+  fileName         String
+  mimeType         String
+  size             Int
+  blobUrl          String
+  kind             String            @default("upload")
+  createdAt        DateTime          @default(now())
+  ai_conversations ai_conversations? @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  ai_messages      ai_messages?      @relation(fields: [messageId], references: [id])
+  users            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+model ai_messages {
+  id               String             @id
+  conversationId   String
+  role             String
+  content          String
+  reasoning        String?
+  attachments      Json?
+  artifacts        Json?
+  toolEvents       Json?
+  model            String?
+  inputTokens      Int                @default(0)
+  outputTokens     Int                @default(0)
+  totalTokens      Int                @default(0)
+  costUsd          Float              @default(0)
+  createdAt        DateTime           @default(now())
+  ai_files         ai_files[]
+  ai_conversations ai_conversations   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  ai_usage_entries ai_usage_entries[]
+
+  @@index([conversationId, createdAt])
+}
+
+model ai_settings {
+  id                   String   @id @default("global")
+  openRouterApiKey     String?
+  defaultModel         String   @default("qwen3.5:0.8b")
+  localModel           String   @default("qwen3.5:0.8b")
+  localBaseUrl         String   @default("http://ollama:11434")
+  freeMonthlyTokens    Int      @default(500000)
+  aiPlanMonthlyTokens  Int      @default(10000000)
+  maxPlanMonthlyTokens Int      @default(25000000)
+  aiPlanPrice          Float    @default(490)
+  maxPlanPrice         Float    @default(890)
+  comboPlanPrice       Float    @default(1190)
+  tokenPackSize        Int      @default(5000000)
+  tokenPackPrice       Float    @default(290)
+  systemPrompt         String?
+  maxContextMessages   Int      @default(14)
+  enableReasoning      Boolean  @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime
+}
+
+model ai_subscriptions {
+  id                String   @id
+  userId            String   @unique
+  tier              String
+  title             String
+  activeUntil       DateTime
+  monthlyTokenLimit Int
+  monthlyTokensUsed Int      @default(0)
+  periodStartsAt    DateTime @default(now())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime
+  users             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ai_usage_entries {
+  id               String            @id
+  userId           String
+  conversationId   String?
+  messageId        String?
+  provider         String
+  model            String
+  inputTokens      Int               @default(0)
+  outputTokens     Int               @default(0)
+  totalTokens      Int               @default(0)
+  costUsd          Float             @default(0)
+  createdAt        DateTime          @default(now())
+  ai_conversations ai_conversations? @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  ai_messages      ai_messages?      @relation(fields: [messageId], references: [id])
+  users            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+model finance_settings {
+  id               String   @id @default("global")
+  taxRate          Float    @default(0)
+  acquiringFeeRate Float    @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime
+}
+
+model finance_withdrawals {
+  id             String   @id
+  title          String
+  note           String?
+  amount         Float
+  withdrawalDate DateTime
+  createdAt      DateTime @default(now())
+  createdById    String?
+  users          User?    @relation(fields: [createdById], references: [id])
+
+  @@index([withdrawalDate])
+}
+
+model telegram_mailings {
+  id              String    @id
+  title           String
+  message         String
+  buttonText      String?
+  buttonUrl       String?
+  targetType      String
+  selectedUserIds String[]  @default([])
+  status          String    @default("scheduled")
+  scheduledAt     DateTime
+  processingAt    DateTime?
+  sentAt          DateTime?
+  targetCount     Int       @default(0)
+  sentCount       Int       @default(0)
+  failedCount     Int       @default(0)
+  lastError       String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime
+  createdById     String?
+  users           User?     @relation(fields: [createdById], references: [id])
+
+  @@index([createdById, createdAt])
+  @@index([status, scheduledAt])
 }
