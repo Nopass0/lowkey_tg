@@ -4,17 +4,24 @@ import { handleStart } from "./src/commands/start";
 import { handleTextMessageWithSiteBilling } from "./src/commands/textHandlerSite";
 import {
   handleMenuMain,
-  handleMenuProfile,
   handleMenuPromo,
   handleMenuReferral,
   handleMenuSupport,
-  handleMenuTariffPeriods,
-  handleMenuTariffs,
   handleMenuVpn,
-  handleToggleAutoRenewal,
   handleLogout,
 } from "./src/actions/menus";
 import { handleMenuTopupViaSite } from "./src/actions/siteBilling";
+import {
+  handleBuyPromoPlan,
+  handleMenuTariffPeriodsWithPromo,
+  handleMenuTariffsWithPromo,
+} from "./src/actions/promoTariffs";
+import {
+  handleCardAction,
+  handleMenuCards,
+  handleMenuProfileWithPayments,
+  handleToggleAutoRenewalSmart,
+} from "./src/actions/profilePayments";
 import {
   handleHowToAndroid,
   handleHowToConnect,
@@ -85,14 +92,16 @@ bot.command("start", async (ctx) => {
 });
 
 bot.action("menu_main", handleMenuMain);
-bot.action("menu_profile", handleMenuProfile);
+bot.action("menu_profile", handleMenuProfileWithPayments);
 bot.action("menu_vpn", handleMenuVpn);
-bot.action("menu_tariffs", handleMenuTariffs);
+bot.action("menu_tariffs", handleMenuTariffsWithPromo);
 bot.action("menu_promo", handleMenuPromo);
 bot.action("menu_referral", handleMenuReferral);
 bot.action("menu_support", handleMenuSupport);
 bot.action("menu_topup", handleMenuTopupViaSite);
-bot.action("toggle_auto_renewal", handleToggleAutoRenewal);
+bot.action("toggle_auto_renewal", handleToggleAutoRenewalSmart);
+bot.action("menu_cards", handleMenuCards);
+bot.action(/^card_(view|default|auto|remove)_.+$/, handleCardAction);
 bot.action("logout", handleLogout);
 bot.action("menu_withdraw", async (ctx) => {
   const { handleMenuWithdraw } = await import("./src/actions/menus");
@@ -189,8 +198,9 @@ bot.action(/^legal_accept_all:(.+)$/, async (ctx) => {
   await handleMenuMain(ctx);
 });
 
-bot.action(/^plan_view_(.+)$/, handleMenuTariffPeriods);
+bot.action(/^plan_view_(.+)$/, handleMenuTariffPeriodsWithPromo);
 bot.action(/^buy_(.+)_(.+)$/, handleBuyPlan);
+bot.action(/^buypromo_(.+)$/, handleBuyPromoPlan);
 
 bot.action(/^check_payment_(.+)$/, async (ctx) => {
   const qrcId = (ctx as any).match?.[1];

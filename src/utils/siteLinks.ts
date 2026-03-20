@@ -44,3 +44,29 @@ export async function createSiteSessionLink(
   )}`;
 }
 
+export async function createSitePaymentLink(params: {
+  userId: string;
+  action: "topup" | "link_card" | "promo_subscribe" | "subscribe";
+  amount?: number;
+  plan?: string;
+  period?: string;
+  fallbackRedirect?: string;
+}) {
+  const code = crypto.randomBytes(24).toString("hex");
+
+  await prisma.user.update({
+    where: { id: params.userId },
+    data: {
+      botLoginCode: code,
+      botLoginCodeExpiresAt: new Date(Date.now() + 15 * 60 * 1000),
+    },
+  });
+
+  return `${SITE_URL}/api/auth/bot-autologin/${code}?redirect=${encodeURIComponent(
+    params.fallbackRedirect ?? "/me/billing",
+  )}&action=${encodeURIComponent(params.action)}${
+    typeof params.amount === "number" ? `&amount=${encodeURIComponent(String(params.amount))}` : ""
+  }${params.plan ? `&plan=${encodeURIComponent(params.plan)}` : ""}${
+    params.period ? `&period=${encodeURIComponent(params.period)}` : ""
+  }`;
+}

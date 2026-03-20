@@ -60,11 +60,13 @@ model SubscriptionPlan {
   isPopular    Boolean             @default(false)
   isActive     Boolean             @default(true)
   sortOrder    Int                 @default(0)
-  promoActive  Boolean             @default(false)
-  promoPrice   Float?
-  promoLabel   String?
-  promoMaxUses Int?
-  promoUsed    Int                 @default(0)
+  promoActive        Boolean             @default(false)
+  promoPrice         Float?
+  promoLabel         String?
+  promoDurationCount Int?                @default(1)
+  promoDurationUnit  String?             @default("month")
+  promoMaxUses       Int?
+  promoUsed          Int                 @default(0)
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
   prices       SubscriptionPrice[]

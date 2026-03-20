@@ -1,6 +1,6 @@
 import { type Context } from "telegraf";
 import { prisma } from "../utils/prisma";
-import { buildBillingPath, createSiteSessionLink } from "../utils/siteLinks";
+import { createSitePaymentLink } from "../utils/siteLinks";
 import { handleTextMessage as handleLegacyTextMessage } from "./textHandler";
 
 export async function handleTextMessageWithSiteBilling(ctx: Context) {
@@ -32,15 +32,12 @@ export async function handleTextMessageWithSiteBilling(ctx: Context) {
     return handleLegacyTextMessage(ctx);
   }
 
-  const billingUrl = await createSiteSessionLink(
-    user.id,
-    buildBillingPath({
-      intent: "topup",
-      amount: amountToTopup,
-      tab: "plans",
-      source: "telegram",
-    }),
-  );
+  const billingUrl = await createSitePaymentLink({
+    userId: user.id,
+    action: "topup",
+    amount: amountToTopup,
+    fallbackRedirect: "/me/billing?source=telegram",
+  });
 
   await ctx.reply(`Сумма к оплате: ${amountToTopup} ₽`, {
     reply_markup: {
@@ -50,4 +47,3 @@ export async function handleTextMessageWithSiteBilling(ctx: Context) {
     },
   });
 }
-

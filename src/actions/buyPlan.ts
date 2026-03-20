@@ -1,7 +1,7 @@
 import { Context } from "telegraf";
 import { prisma } from "../utils/prisma";
 import { PERIOD_LABELS, getPlanById } from "../utils/plans";
-import { buildBillingPath, createSiteSessionLink } from "../utils/siteLinks";
+import { createSitePaymentLink } from "../utils/siteLinks";
 
 export async function handleBuyPlan(ctx: Context) {
   const telegramId = ctx.from?.id;
@@ -33,25 +33,22 @@ export async function handleBuyPlan(ctx: Context) {
     });
   }
 
-  const billingUrl = await createSiteSessionLink(
-    user.id,
-    buildBillingPath({
-      intent: "subscribe",
-      plan: planId,
-      period,
-      tab: "plans",
-      source: "telegram",
-    }),
-  );
+  const billingUrl = await createSitePaymentLink({
+    userId: user.id,
+    action: "subscribe",
+    plan: planId,
+    period,
+    fallbackRedirect: "/me/billing?subscribed=1",
+  });
 
   await ctx.answerCbQuery("Открываю оплату на сайте.", {
     show_alert: false,
   });
 
   await ctx.editMessageText(
-    `Покупка тарифа **${plan.name}** на **${periodLabel}** перенесена на сайт.\n\n` +
-      `На сайте оплата идёт через YooKassa с привязкой карты и автосписанием. ` +
-      `Если баланса уже хватает, сайт всё равно попросит один раз привязать карту для автопродления.`,
+    `Покупка тарифа **${plan.name}** на **${periodLabel}** подготовлена.\n\n` +
+      `Ссылка сразу ведёт на платёж YooKassa с привязкой карты и автосписанием. ` +
+      `Если баланса хватает, будет только привязка карты и подписка активируется с баланса.`,
     {
       parse_mode: "Markdown",
       reply_markup: {
@@ -63,4 +60,3 @@ export async function handleBuyPlan(ctx: Context) {
     },
   );
 }
-
