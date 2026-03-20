@@ -118,7 +118,7 @@ export async function handleAdminUserView(ctx: Context) {
     where: { id: userId },
     include: {
       subscription: true,
-      _count: { select: { referrals: true } },
+      _count: { select: { referrals: true, paymentMethods: true } },
     },
   });
 
@@ -157,6 +157,10 @@ export async function handleAdminUserView(ctx: Context) {
       ),
     ],
   ];
+
+  keyboard.push([
+    Markup.button.callback("💳 Методы оплаты", `admin_user_methods_${user.id}`),
+  ]);
 
   if (user.referredById) {
     keyboard.push([
@@ -359,6 +363,70 @@ export async function handleAdminUserTransactions(ctx: Context) {
 }
 
 /**
+ * Shows all linked payment methods for a specific user.
+ *
+ * @param ctx Telegram context.
+ */
+export async function handleAdminUserPaymentMethods(ctx: Context) {
+  if (!isAdmin(ctx)) return;
+
+  const data = (ctx.callbackQuery as any).data as string;
+  const userId = data.split("_")[3];
+  if (!userId) return;
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    include: {
+      paymentMethods: {
+        orderBy: [{ isDefault: "desc" }, { createdAt: "desc" }],
+      },
+    },
+  });
+
+  if (!user) {
+    await ctx.answerCbQuery("Пользователь не найден.");
+    return;
+  }
+
+  const listText = user.paymentMethods.length
+    ? user.paymentMethods
+        .map((method) => {
+          const flags = [
+            method.isDefault ? "по умолчанию" : null,
+            method.allowAutoCharge ? "автосписание" : "без автосписания",
+          ].filter(Boolean);
+          const details = [
+            method.cardBrand || method.type,
+            method.cardLast4 ? `•••• ${method.cardLast4}` : null,
+            method.cardExpMonth && method.cardExpYear
+              ? `${String(method.cardExpMonth).padStart(2, "0")}/${String(method.cardExpYear).slice(-2)}`
+              : null,
+          ].filter(Boolean);
+
+          return (
+            `• *${method.title}*\n` +
+            `${details.join(" · ")}\n` +
+            `ID: \`${method.id}\`\n` +
+            `${flags.join(" · ")}\n` +
+            `Создан: ${method.createdAt.toLocaleString("ru-RU")}`
+          );
+        })
+        .join("\n\n")
+    : "У пользователя нет привязанных методов оплаты.";
+
+  await editOrReply(
+    ctx,
+    `💳 *Методы оплаты ${user.login}*\n\n${listText}`,
+    {
+      parse_mode: "Markdown",
+      reply_markup: Markup.inlineKeyboard([
+        [Markup.button.callback("◀️ К пользователю", `admin_user_view_${user.id}`)],
+      ]).reply_markup,
+    },
+  );
+}
+
+/**
  * Handles admin user actions driven by inline buttons.
  *
  * @param ctx Telegram context.
@@ -368,6 +436,11 @@ export async function handleAdminUserAction(ctx: Context) {
 
   const data = (ctx.callbackQuery as any).data as string;
   const telegramId = BigInt(ctx.from!.id);
+
+  if (data.startsWith("admin_user_methods_")) {
+    await handleAdminUserPaymentMethods(ctx);
+    return;
+  }
 
   if (data === "admin_user_search") {
     await prisma.user.update({
