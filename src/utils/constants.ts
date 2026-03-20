@@ -11,6 +11,7 @@ export const LEGAL_URLS = {
  */
 export const PAGINATION = {
   users: 10,
+  transactions: 10,
   promos: 8,
   tickets: 5,
   mailings: 5,

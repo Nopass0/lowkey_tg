@@ -1,66 +1,35 @@
+import { Markup } from "telegraf";
 import { bot } from "./bot";
 import { prisma } from "./prisma";
-import { PLANS, PERIOD_DAYS } from "./plans";
+import { PERIOD_DAYS, PERIOD_LABELS, getPlanById } from "./plans";
+import { calculateDiscountedPrice } from "./subscriptionPurchase";
 
 export async function startSubscriptionWorker() {
-  console.log("🕒 Starting Subscription Worker...");
+  console.log("Starting Subscription Worker...");
 
-  // Run once on startup, then every 6 hours
   await checkSubscriptions();
-  setInterval(checkSubscriptions, 6 * 60 * 60 * 1000);
+  setInterval(checkSubscriptions, 40 * 60 * 1000);
 }
 
 async function checkSubscriptions() {
   try {
-    console.log("🔍 Checking subscriptions for notifications and renewals...");
+    console.log("Checking subscriptions for notifications and renewals...");
     const now = new Date();
+    const oneDayAway = new Date(now.getTime() + 24 * 60 * 60 * 1000);
 
-    const sevenDaysAway = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-    const threeDaysAway = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
-    const oneDayAway = new Date(now.getTime() + 1 * 24 * 60 * 60 * 1000);
-
-    // We find active subscriptions that are about to expire
-    const subs = await prisma.subscription.findMany({
+    const expiringSoon = await prisma.subscription.findMany({
       where: {
         isLifetime: false,
-        activeUntil: { gt: now, lt: sevenDaysAway },
+        activeUntil: { gt: now, lte: oneDayAway },
       },
       include: { user: true },
     });
 
-    for (const sub of subs) {
-      if (!sub.user.telegramId) continue;
-
-      const diffHours =
-        (sub.activeUntil.getTime() - now.getTime()) / (1000 * 60 * 60);
-      const diffDays = Math.ceil(diffHours / 24);
-
-      let message = "";
-      if (diffDays === 7)
-        message = "🗓 **До конца вашей подписки осталось 7 дней.**";
-      else if (diffDays === 3)
-        message = "🗓 **До конца вашей подписки осталось 3 дня.**";
-      else if (diffDays === 1)
-        message = "⚠️ **Ваша подписка истекает завтра!**";
-
-      if (message) {
-        const renewalMethod = sub.autoRenewal
-          ? "\n\n🔄 У вас включено автопродление. Убедитесь, что на балансе достаточно средств."
-          : "\n\n❌ Автопродление выключено. Продлите подписку в меню профиля.";
-
-        try {
-          await bot.telegram.sendMessage(
-            sub.user.telegramId.toString(),
-            message + renewalMethod,
-            {
-              parse_mode: "Markdown",
-            },
-          );
-        } catch (e) {}
-      }
+    for (const subscription of expiringSoon) {
+      if (!subscription.user.telegramId) continue;
+      await sendExpiryReminder(subscription);
     }
 
-    // Handle actual expiration (Auto-renewal)
     const expiringNow = await prisma.subscription.findMany({
       where: {
         isLifetime: false,
@@ -70,42 +39,105 @@ async function checkSubscriptions() {
       include: { user: true },
     });
 
-    for (const sub of expiringNow) {
-      // Attempt renewal
-      await attemptAutoRenewal(sub);
+    for (const subscription of expiringNow) {
+      await attemptAutoRenewal(subscription);
     }
   } catch (err: any) {
     if (err.code === "P1017" || err.message?.includes("connection")) {
       console.log(
-        "🕒 Subscription Worker: Database connection lost, retrying in next cycle...",
+        "Subscription Worker: Database connection lost, retrying in next cycle...",
       );
     } else {
-      console.error("🕒 Subscription Worker error:", err);
+      console.error("Subscription Worker error:", err);
     }
   }
+}
+
+async function sendExpiryReminder(subscription: any) {
+  const plan = await getPlanById(subscription.planId);
+  if (!plan) return;
+
+  const fixedDiscount = subscription.user.pendingDiscountFixed ?? 0;
+  const pctDiscount = subscription.user.pendingDiscountPct ?? 0;
+
+  const buttons = Object.entries(plan.prices)
+    .filter(([period]) => period in PERIOD_DAYS && period in PERIOD_LABELS)
+    .map(([period, monthlyPrice]) => {
+      const periodDays = PERIOD_DAYS[period];
+      const periodLabel = PERIOD_LABELS[period];
+      if (!periodDays || !periodLabel) {
+        return null;
+      }
+
+      const totalPrice = calculateDiscountedPrice(
+        monthlyPrice * (periodDays / 30),
+        fixedDiscount,
+        pctDiscount,
+      );
+      return [
+        Markup.button.callback(
+          `${periodLabel} · ${totalPrice} ₽`,
+          `buy_${plan.id}_${period}`,
+        ),
+      ];
+    })
+    .filter((buttonRow): buttonRow is ReturnType<typeof Markup.button.callback>[] => Boolean(buttonRow));
+
+  buttons.push([Markup.button.callback("💳 Пополнить баланс", "menu_topup")]);
+
+  const renewalNote = subscription.autoRenewal
+    ? "\n\nАвтопродление включено, но вы можете продлить подписку вручную уже сейчас."
+    : "\n\nАвтопродление выключено. Продлите подписку заранее, чтобы не было паузы.";
+  const discountNote =
+    pctDiscount > 0
+      ? `\nАктивна скидка: ${pctDiscount}%`
+      : fixedDiscount > 0
+        ? `\nАктивна скидка: ${fixedDiscount} ₽`
+        : "";
+
+  await bot.telegram
+    .sendMessage(
+      subscription.user.telegramId.toString(),
+      `⚠️ *Подписка "${plan.name}" заканчивается завтра*\n\n` +
+        `Действует до: *${subscription.activeUntil.toLocaleDateString("ru-RU")}*\n` +
+        `Баланс: *${subscription.user.balance} ₽*` +
+        discountNote +
+        `\n\n` +
+        `Если не продлить подписку вовремя, сервис отключится и могут возникнуть проблемы с подключением к интернету.` +
+        renewalNote +
+        `\n\nВыберите срок продления по текущей цене:`,
+      {
+        parse_mode: "Markdown",
+        reply_markup: Markup.inlineKeyboard(buttons).reply_markup,
+      },
+    )
+    .catch((error) => {
+      console.error("[subscription-reminder] failed", error);
+    });
 }
 
 async function attemptAutoRenewal(subscription: any) {
   const user = subscription.user;
   const period = "monthly";
-  const fallbackPlan = PLANS[0];
-  const plan = PLANS.find((p) => p.id === subscription.planId) || fallbackPlan;
+  const plan = await getPlanById(subscription.planId);
   if (!plan) return;
 
   const durationDays = PERIOD_DAYS[period];
-  const price = (plan.prices as any)[period];
-  if (typeof price !== "number" || typeof durationDays !== "number") {
+  const monthlyPrice = plan.prices[period];
+  if (typeof monthlyPrice !== "number" || typeof durationDays !== "number") {
     return;
   }
 
-  if (user.balance >= price) {
+  const totalPrice = monthlyPrice * (durationDays / 30);
+
+  if (user.balance >= totalPrice) {
     const durationMs = durationDays * 24 * 60 * 60 * 1000;
     const newUntil = new Date(subscription.activeUntil.getTime() + durationMs);
 
     await prisma.$transaction(async (tx) => {
       await tx.user.update({
         where: { id: user.id },
-        data: { balance: { decrement: price } },
+        data: { balance: { decrement: totalPrice } },
       });
       await tx.subscription.update({
         where: { id: subscription.id },
@@ -115,30 +147,28 @@ async function attemptAutoRenewal(subscription: any) {
         data: {
           userId: user.id,
           type: "subscription_auto",
-          amount: -price,
+          amount: -totalPrice,
           title: `Автопродление "${plan.name}"`,
         },
       });
     });
 
-    try {
-      await bot.telegram.sendMessage(
+    await bot.telegram
+      .sendMessage(
         user.telegramId.toString(),
-        `✅ **Ваша подписка "${plan.name}" была успешно продлена на месяц.**\n\nСледующее списание: ${newUntil.toLocaleDateString("ru-RU")}`,
+        `✅ *Ваша подписка "${plan.name}" продлена на 1 мес.*\n\nСледующее списание: ${newUntil.toLocaleDateString("ru-RU")}`,
         { parse_mode: "Markdown" },
-      );
-    } catch (e) {}
+      )
+      .catch(() => {});
   } else {
-    // Not enough balance
-    try {
-      await bot.telegram.sendMessage(
+    await bot.telegram
+      .sendMessage(
         user.telegramId.toString(),
-        `❌ **Ошибка автопродления!**\n\nНа вашем балансе недостаточно средств (${user.balance} ₽) для продления подписки "${plan.name}" за ${price} ₽.\n\nПодписка временно приостановлена. Пополните баланс для возобновления.`,
+        `❌ *Автопродление не выполнено*\n\nНа балансе ${user.balance} ₽, а для продления "${plan.name}" нужен ${totalPrice} ₽.`,
         { parse_mode: "Markdown" },
-      );
-    } catch (e) {}
+      )
+      .catch(() => {});
 
-    // Switch off auto-renewal to stop spamming every check
     await prisma.subscription.update({
       where: { id: subscription.id },
       data: { autoRenewal: false },

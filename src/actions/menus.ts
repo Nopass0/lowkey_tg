@@ -1,11 +1,19 @@
 import { Markup, type Context } from "telegraf";
 import { prisma } from "../utils/prisma";
 import { bot, getMainMenu } from "../utils/bot";
-import { PLANS, PERIOD_DAYS, PERIOD_LABELS } from "../utils/plans";
+import {
+  PERIOD_DAYS,
+  PERIOD_LABELS,
+  getAvailablePlans,
+  getPlanById,
+  getPlanMonthlyPrice,
+} from "../utils/plans";
 import { editOrReply } from "../utils/telegram";
 import { PAGINATION } from "../utils/constants";
 import { encodeBotState } from "../utils/state";
 import { normalizeTicketStatus, parseTicketMessage } from "../utils/support";
+import { getEffectiveReferralRate } from "../utils/referrals";
+import { calculateDiscountedPrice } from "../utils/subscriptionPurchase";
 
 const ADMIN_ID = process.env.TELEGRAM_ADMIN_CHAT_ID?.trim();
 
@@ -228,9 +236,11 @@ export async function handleMenuTariffs(ctx: Context) {
 
   if (!user) return;
 
-  const buttons = PLANS.map((plan) => [
+  const plans = await getAvailablePlans();
+
+  const buttons = plans.map((plan) => [
     Markup.button.callback(
-      `💎 ${plan.name} от ${plan.prices.yearly} ₽/мес`,
+      `💎 ${plan.name} от ${Math.round(getPlanMonthlyPrice(plan))} ₽/мес`,
       `plan_view_${plan.id}`,
     ),
   ]);
@@ -242,7 +252,8 @@ export async function handleMenuTariffs(ctx: Context) {
 
   const text =
     `💎 *Тарифы Lowkey*\n\nВаш баланс: *${user.balance} ₽*\n\n` +
-    PLANS.map((plan) => `• *${plan.name}*: ${plan.features.slice(0, 2).join(", ")}`)
+    plans
+      .map((plan) => `• *${plan.name}*: ${plan.features.slice(0, 2).join(", ")}`)
       .join("\n");
 
   await editOrReply(ctx, text, {
@@ -267,22 +278,20 @@ export async function handleMenuTariffPeriods(ctx: Context) {
   if (!user) return;
 
   const planId = (ctx as any).match?.[1];
-  const plan = PLANS.find((entry) => entry.id === planId);
+  const plan = await getPlanById(planId);
   if (!plan) {
     await ctx.answerCbQuery("Тариф не найден.");
     return;
   }
 
-  const buttons = Object.entries(plan.prices).flatMap(([period, pricePerMonth]) => {
+  const buttons = Object.entries(plan.prices).flatMap(([period, monthlyPrice]) => {
     const days = PERIOD_DAYS[period];
     if (!days) return [];
 
-    const rawPrice = pricePerMonth * (days / 30);
-    const discounted = Math.max(
-      1,
-      Math.round(
-        (rawPrice * (100 - user.pendingDiscountPct)) / 100 - user.pendingDiscountFixed,
-      ),
+    const discounted = calculateDiscountedPrice(
+      monthlyPrice * (days / 30),
+      user.pendingDiscountFixed,
+      user.pendingDiscountPct,
     );
 
     return [
@@ -364,7 +373,7 @@ export async function handleMenuReferral(ctx: Context) {
   await editOrReply(
     ctx,
     `🤝 *Партнёрская программа*\n\n` +
-      `Ставка: *${(user.referralRate * 100).toFixed(0)}%*\n` +
+      `Ставка: *${(getEffectiveReferralRate(user.referralRate) * 100).toFixed(0)}%*\n` +
       `Рефералов: *${referralsCount}*\n` +
       `Реферальный баланс: *${user.referralBalance} ₽*\n\n` +
       `Ссылка:\n\`${link}\``,

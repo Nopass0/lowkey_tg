@@ -116,7 +116,10 @@ export async function handleAdminUserView(ctx: Context) {
   const userId = (ctx.callbackQuery as any).data.split("_")[3];
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    include: { subscription: true },
+    include: {
+      subscription: true,
+      _count: { select: { referrals: true } },
+    },
   });
 
   if (!user) {
@@ -128,37 +131,229 @@ export async function handleAdminUserView(ctx: Context) {
     ? `${user.subscription.planName} до ${user.subscription.activeUntil.toLocaleString("ru-RU")}`
     : "Нет активной подписки";
 
+  const keyboard = [
+    [
+      Markup.button.callback("💰 Баланс", `admin_user_balance_${user.id}`),
+      Markup.button.callback("🤝 Реф. баланс", `admin_user_refbalance_${user.id}`),
+    ],
+    [
+      Markup.button.callback("⏱ Выдать подписку", `admin_user_sub_${user.id}`),
+      Markup.button.callback(
+        user.isBanned ? "✅ Разбанить" : "🚫 Забанить",
+        `admin_user_toggle_ban_${user.id}`,
+      ),
+    ],
+    [
+      Markup.button.callback(
+        `👥 Рефералы (${user._count.referrals})`,
+        `admin_user_referrals_${user.id}_0`,
+      ),
+      Markup.button.callback("📜 Транзакции", `admin_user_transactions_${user.id}_0`),
+    ],
+    [
+      Markup.button.callback(
+        "🎫 Recovery-промо",
+        `admin_user_gen_recovery_${user.id}`,
+      ),
+    ],
+  ];
+
+  if (user.referredById) {
+    keyboard.push([
+      Markup.button.callback("◀️ Назад", `admin_user_view_${user.referredById}`),
+    ]);
+  }
+
+  keyboard.push([Markup.button.callback("◀️ К списку", "admin_users_0")]);
+
   await editOrReply(
     ctx,
     `👤 *${user.login}*\n\n` +
       `ID: \`${user.id}\`\n` +
       `Баланс: *${user.balance} ₽*\n` +
       `Реферальный баланс: *${user.referralBalance} ₽*\n` +
+      `Привел рефералов: *${user._count.referrals}*\n` +
       `Подписка: ${subscriptionText}\n` +
       `Telegram: ${user.telegramId ? "привязан" : "не привязан"}\n` +
       `Статус: ${user.isBanned ? "заблокирован" : "активен"}`,
     {
       parse_mode: "Markdown",
-      reply_markup: Markup.inlineKeyboard([
-        [
-          Markup.button.callback("💰 Баланс", `admin_user_balance_${user.id}`),
-          Markup.button.callback("🤝 Реф. баланс", `admin_user_refbalance_${user.id}`),
-        ],
-        [
-          Markup.button.callback("⏱ Выдать подписку", `admin_user_sub_${user.id}`),
-          Markup.button.callback(
-            user.isBanned ? "✅ Разбанить" : "🚫 Забанить",
-            `admin_user_toggle_ban_${user.id}`,
-          ),
-        ],
-        [
-          Markup.button.callback(
-            "🎫 Recovery-промо",
-            `admin_user_gen_recovery_${user.id}`,
-          ),
-        ],
-        [Markup.button.callback("◀️ К списку", "admin_users_0")],
-      ]).reply_markup,
+      reply_markup: Markup.inlineKeyboard(keyboard).reply_markup,
+    },
+  );
+}
+
+/**
+ * Shows paginated referrals list for a specific user.
+ *
+ * @param ctx Telegram context.
+ */
+export async function handleAdminUserReferrals(ctx: Context) {
+  if (!isAdmin(ctx)) return;
+
+  const match = (ctx as any).match as RegExpExecArray | undefined;
+  const userId = match?.[1];
+  const page = Number(match?.[2] || "0");
+  if (!userId) return;
+
+  const owner = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, login: true },
+  });
+
+  if (!owner) {
+    await ctx.answerCbQuery("Пользователь не найден.");
+    return;
+  }
+
+  const [referrals, total] = await Promise.all([
+    prisma.user.findMany({
+      where: { referredById: userId },
+      skip: page * PAGINATION.users,
+      take: PAGINATION.users,
+      orderBy: { joinedAt: "desc" },
+    }),
+    prisma.user.count({
+      where: { referredById: userId },
+    }),
+  ]);
+
+  const totalPages = Math.max(1, Math.ceil(total / PAGINATION.users));
+  const buttons = referrals.map((user) => [
+    Markup.button.callback(
+      `${user.login} · ${user.balance} ₽`,
+      `admin_user_view_${user.id}`,
+    ),
+  ]);
+
+  const pager = [];
+  if (page > 0) {
+    pager.push(
+      Markup.button.callback(
+        "⬅️ Назад",
+        `admin_user_referrals_${userId}_${page - 1}`,
+      ),
+    );
+  }
+  if (page + 1 < totalPages) {
+    pager.push(
+      Markup.button.callback(
+        "Вперёд ➡️",
+        `admin_user_referrals_${userId}_${page + 1}`,
+      ),
+    );
+  }
+  if (pager.length) {
+    buttons.push(pager);
+  }
+
+  buttons.push([
+    Markup.button.callback("◀️ К пользователю", `admin_user_view_${userId}`),
+  ]);
+
+  const listText = referrals.length
+    ? referrals
+        .map(
+          (user) =>
+            `• \`${user.login}\` · ${user.balance} ₽ · ${user.joinedAt.toLocaleDateString("ru-RU")}`,
+        )
+        .join("\n")
+    : "Рефералов пока нет.";
+
+  await editOrReply(
+    ctx,
+    `👥 *Рефералы ${owner.login}*\nСтраница ${page + 1}/${totalPages}\n\n${listText}`,
+    {
+      parse_mode: "Markdown",
+      reply_markup: Markup.inlineKeyboard(buttons).reply_markup,
+    },
+  );
+}
+
+/**
+ * Shows paginated transactions list for a specific user.
+ *
+ * @param ctx Telegram context.
+ */
+export async function handleAdminUserTransactions(ctx: Context) {
+  if (!isAdmin(ctx)) return;
+
+  const match = (ctx as any).match as RegExpExecArray | undefined;
+  const userId = match?.[1];
+  const page = Number(match?.[2] || "0");
+  if (!userId) return;
+
+  const owner = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, login: true },
+  });
+
+  if (!owner) {
+    await ctx.answerCbQuery("Пользователь не найден.");
+    return;
+  }
+
+  const [transactions, total] = await Promise.all([
+    prisma.transaction.findMany({
+      where: { userId },
+      skip: page * PAGINATION.transactions,
+      take: PAGINATION.transactions,
+      orderBy: { createdAt: "desc" },
+    }),
+    prisma.transaction.count({
+      where: { userId },
+    }),
+  ]);
+
+  const totalPages = Math.max(1, Math.ceil(total / PAGINATION.transactions));
+  const buttons = [];
+
+  const pager = [];
+  if (page > 0) {
+    pager.push(
+      Markup.button.callback(
+        "⬅️ Назад",
+        `admin_user_transactions_${userId}_${page - 1}`,
+      ),
+    );
+  }
+  if (page + 1 < totalPages) {
+    pager.push(
+      Markup.button.callback(
+        "Вперёд ➡️",
+        `admin_user_transactions_${userId}_${page + 1}`,
+      ),
+    );
+  }
+  if (pager.length) {
+    buttons.push(pager);
+  }
+
+  buttons.push([
+    Markup.button.callback("◀️ К пользователю", `admin_user_view_${userId}`),
+  ]);
+
+  const listText = transactions.length
+    ? transactions
+        .map((item) => {
+          const sign = item.amount >= 0 ? "+" : "";
+          const direction = item.amount >= 0 ? "зачисление" : "расход";
+          return (
+            `• ${item.createdAt.toLocaleString("ru-RU")}\n` +
+            `\`${sign}${item.amount} ₽\` · ${direction}\n` +
+            `${item.title}\n` +
+            `Тип: ${item.type}`
+          );
+        })
+        .join("\n\n")
+    : "Транзакций пока нет.";
+
+  await editOrReply(
+    ctx,
+    `📜 *Транзакции ${owner.login}*\nСтраница ${page + 1}/${totalPages}\n\n${listText}`,
+    {
+      parse_mode: "Markdown",
+      reply_markup: Markup.inlineKeyboard(buttons).reply_markup,
     },
   );
 }
