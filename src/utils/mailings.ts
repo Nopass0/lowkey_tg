@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { MAILING_STATUS } from "./constants";
 import { bot } from "./bot";
 import { prisma } from "./prisma";
@@ -5,6 +6,7 @@ import { buildBillingPath, createSitePaymentLink, createSiteSessionLink } from "
 
 let mailingWorkerStarted = false;
 let mailingTickInProgress = false;
+let cachedBotUsername: string | null = null;
 
 export interface MailingDraft {
   title: string;
@@ -16,6 +18,13 @@ export interface MailingDraft {
   targetUserIds?: string[];
   targetLogin?: string | null;
   scheduledAt?: string;
+}
+
+export interface MailingButtonResolution {
+  text: string;
+  url: string;
+  actionType: string;
+  actionValue: string | null;
 }
 
 function normalizeString(value: unknown): string {
@@ -155,7 +164,67 @@ function describeMailingButton(buttonText?: string | null, buttonUrl?: string | 
   if (!buttonText || !buttonUrl) return "без кнопки";
   if (buttonUrl === "action:link_card") return `${buttonText} -> привязать карту`;
   if (buttonUrl === "action:billing") return `${buttonText} -> открыть биллинг`;
+  if (buttonUrl.startsWith("action:promo:")) {
+    return `${buttonText} -> оформить акционную подписку`;
+  }
   return `${buttonText} -> ${buttonUrl}`;
+}
+
+async function getTelegramBotUsername() {
+  if (cachedBotUsername) {
+    return cachedBotUsername;
+  }
+
+  const username =
+    process.env.TELEGRAM_BOT_USERNAME?.trim().replace(/^@/, "") ||
+    (await bot.telegram.getMe()).username ||
+    "";
+
+  if (!username) {
+    throw new Error("TELEGRAM_BOT_USERNAME is not configured");
+  }
+
+  cachedBotUsername = username;
+  return username;
+}
+
+async function createMailingActionLink(params: {
+  mailingId: string;
+  userId: string;
+  buttonText: string;
+  actionType: string;
+  actionValue?: string | null;
+}): Promise<MailingButtonResolution> {
+  const token = crypto.randomBytes(12).toString("hex");
+  const mailingActions = (prisma as any).telegram_mailing_actions;
+  const action = await mailingActions.upsert({
+    where: {
+      mailingId_userId: {
+        mailingId: params.mailingId,
+        userId: params.userId,
+      },
+    },
+    create: {
+      mailingId: params.mailingId,
+      userId: params.userId,
+      token,
+      actionType: params.actionType,
+      actionValue: params.actionValue ?? null,
+    },
+    update: {
+      token,
+      actionType: params.actionType,
+      actionValue: params.actionValue ?? null,
+    },
+  });
+
+  const username = await getTelegramBotUsername();
+  return {
+    text: params.buttonText,
+    url: `https://t.me/${username}?start=ml_${action.token}`,
+    actionType: params.actionType,
+    actionValue: params.actionValue ?? null,
+  };
 }
 
 async function resolveMailingUsers(targetType: string, selectedUserIds: string[]) {
@@ -220,6 +289,7 @@ async function resolveMailingUsers(targetType: string, selectedUserIds: string[]
 }
 
 async function resolveMailingButton(params: {
+  mailingId: string;
   userId: string;
   buttonText?: string | null;
   buttonUrl?: string | null;
@@ -227,16 +297,13 @@ async function resolveMailingButton(params: {
   promoButtonText?: string | null;
 }) {
   if (params.promoPlan) {
-    const promoUrl = await createSitePaymentLink({
+    return createMailingActionLink({
+      mailingId: params.mailingId,
       userId: params.userId,
-      action: "promo_subscribe",
-      plan: params.promoPlan,
-      fallbackRedirect: "/me/billing?subscribed=1",
+      buttonText: params.promoButtonText ?? "Оформить по акции",
+      actionType: "promo_subscribe",
+      actionValue: params.promoPlan,
     });
-    return {
-      text: params.promoButtonText ?? "Оформить по акции",
-      url: promoUrl,
-    };
   }
 
   if (!params.buttonText || !params.buttonUrl) {
@@ -244,30 +311,42 @@ async function resolveMailingButton(params: {
   }
 
   if (params.buttonUrl === "action:link_card") {
-    const url = await createSitePaymentLink({
+    return createMailingActionLink({
+      mailingId: params.mailingId,
       userId: params.userId,
-      action: "link_card",
-      fallbackRedirect: buildBillingPath({ tab: "cards", source: "telegram" }),
+      buttonText: params.buttonText,
+      actionType: "link_card",
     });
-    return { text: params.buttonText, url };
   }
 
   if (params.buttonUrl === "action:billing") {
-    const url = await createSiteSessionLink(
-      params.userId,
-      buildBillingPath({ tab: "plans", source: "telegram" }),
-    );
-    return { text: params.buttonText, url };
+    return createMailingActionLink({
+      mailingId: params.mailingId,
+      userId: params.userId,
+      buttonText: params.buttonText,
+      actionType: "billing",
+    });
   }
 
-  return { text: params.buttonText, url: params.buttonUrl };
+  if (params.buttonUrl.startsWith("action:promo:")) {
+    return createMailingActionLink({
+      mailingId: params.mailingId,
+      userId: params.userId,
+      buttonText: params.buttonText,
+      actionType: "promo_subscribe",
+      actionValue: params.buttonUrl.replace("action:promo:", ""),
+    });
+  }
+
+  return createMailingActionLink({
+    mailingId: params.mailingId,
+    userId: params.userId,
+    buttonText: params.buttonText,
+    actionType: "external",
+    actionValue: params.buttonUrl,
+  });
 }
 
-/**
- * Sends a mailing to selected recipients and stores result counters.
- *
- * @param mailingId Mailing record id.
- */
 export async function processMailing(mailingId: string) {
   const mailing = await prisma.telegram_mailings.findUnique({
     where: { id: mailingId },
@@ -295,30 +374,28 @@ export async function processMailing(mailingId: string) {
   for (const user of users) {
     try {
       const resolvedButton = await resolveMailingButton({
+        mailingId: mailing.id,
         userId: user.id,
         buttonText: mailing.buttonText ?? content.buttonText,
         buttonUrl: mailing.buttonUrl ?? content.buttonUrl,
         promoPlan: content.promoPlan,
         promoButtonText: content.promoButtonText,
       });
-      const inlineButton = resolvedButton
-        ? [[{ text: resolvedButton.text, url: resolvedButton.url }]]
-        : undefined;
+      const inlineButton: Array<Array<{ text: string; url: string }>> | undefined =
+        resolvedButton
+          ? [[{ text: resolvedButton.text, url: resolvedButton.url }]]
+          : undefined;
 
       if (content.imageUrl) {
         await bot.telegram.sendPhoto(Number(user.telegramId), content.imageUrl, {
           caption: content.text || mailing.title || undefined,
           parse_mode: "HTML",
-          reply_markup: inlineButton
-            ? { inline_keyboard: inlineButton }
-            : undefined,
+          reply_markup: inlineButton ? { inline_keyboard: inlineButton } : undefined,
         });
       } else {
         await bot.telegram.sendMessage(Number(user.telegramId), content.text || mailing.message, {
           parse_mode: "HTML",
-          reply_markup: inlineButton
-            ? { inline_keyboard: inlineButton }
-            : undefined,
+          reply_markup: inlineButton ? { inline_keyboard: inlineButton } : undefined,
         });
       }
       sentCount += 1;
@@ -341,11 +418,117 @@ export async function processMailing(mailingId: string) {
   });
 }
 
+export async function resolveMailingActionStart(token: string, telegramId: bigint) {
+  const mailingActions = (prisma as any).telegram_mailing_actions;
+  const action = await mailingActions.findUnique({
+    where: { token },
+    include: { mailing: true, user: true },
+  });
+
+  if (!action || action.user.telegramId !== telegramId) {
+    return null;
+  }
+
+  const now = new Date();
+  await mailingActions.update({
+    where: { id: action.id },
+    data: {
+      clickCount: { increment: 1 },
+      firstClickedAt: action.firstClickedAt ?? now,
+      lastClickedAt: now,
+    },
+  });
+
+  let url = action.actionValue || "";
+  if (action.actionType === "link_card") {
+    url = await createSitePaymentLink({
+      userId: action.userId,
+      action: "link_card",
+      fallbackRedirect: buildBillingPath({ tab: "cards", source: "telegram" }),
+    });
+  } else if (action.actionType === "billing") {
+    url = await createSiteSessionLink(
+      action.userId,
+      buildBillingPath({ tab: "plans", source: "telegram" }),
+    );
+  } else if (action.actionType === "promo_subscribe") {
+    url = await createSitePaymentLink({
+      userId: action.userId,
+      action: "promo_subscribe",
+      plan: action.actionValue || undefined,
+      fallbackRedirect: "/me/billing?subscribed=1",
+    });
+  }
+
+  await mailingActions.update({
+    where: { id: action.id },
+    data: {
+      completeCount: { increment: 1 },
+      firstCompletedAt: action.firstCompletedAt ?? now,
+      lastCompletedAt: now,
+    },
+  });
+
+  return { action, url };
+}
+
+export async function getMailingActionStats(mailingId: string) {
+  const mailingActions = (prisma as any).telegram_mailing_actions;
+  const actions: Array<{
+    clickCount: number;
+    completeCount: number;
+    firstClickedAt: Date | null;
+    firstCompletedAt: Date | null;
+  }> = await mailingActions.findMany({
+    where: { mailingId },
+    select: {
+      clickCount: true,
+      completeCount: true,
+      firstClickedAt: true,
+      firstCompletedAt: true,
+    },
+  });
+
+  return {
+    totalClicks: actions.reduce((sum: number, item) => sum + item.clickCount, 0),
+    totalCompletes: actions.reduce((sum: number, item) => sum + item.completeCount, 0),
+    uniqueClicks: actions.filter((item) => item.firstClickedAt).length,
+    uniqueCompletes: actions.filter((item) => item.firstCompletedAt).length,
+  };
+}
+
+export async function buildPromoMailingButtonFromPlan(planSlug: string) {
+  const plan = await prisma.subscriptionPlan.findFirst({
+    where: {
+      slug: planSlug,
+      isActive: true,
+      promoActive: true,
+    },
+    include: {
+      prices: {
+        where: { period: "monthly" },
+        take: 1,
+      },
+    },
+  });
+
+  if (!plan || plan.promoPrice == null) {
+    return null;
+  }
+
+  const monthlyPrice = plan.prices[0]?.price;
+  const promoLabel = plan.promoLabel?.trim() || `Первый период за ${plan.promoPrice} ₽`;
+  const afterLabel = monthlyPrice != null ? `, затем ${monthlyPrice} ₽/мес` : "";
+
+  return {
+    buttonText: `Оформить за ${plan.promoPrice} ₽`,
+    buttonUrl: `action:promo:${plan.slug}`,
+    summary: `${plan.name}: ${promoLabel}${afterLabel}`,
+  };
+}
+
 export { describeMailingButton, describeMailingTarget, parseMailingDirectives };
 
-/**
- * Starts a lightweight background polling worker for scheduled mailings.
- */
 export function startMailingWorker() {
   if (mailingWorkerStarted) return;
   mailingWorkerStarted = true;
@@ -370,11 +553,7 @@ export function startMailingWorker() {
         try {
           await processMailing(mailing.id);
         } catch (error) {
-          console.error(
-            "[mailingWorker] failed to process mailing",
-            mailing.id,
-            error,
-          );
+          console.error("[mailingWorker] failed to process mailing", mailing.id, error);
         }
       }
     } catch (error: any) {
@@ -383,9 +562,7 @@ export function startMailingWorker() {
         error?.message?.includes("connection") ||
         error?.message?.includes("Timed out fetching a new connection")
       ) {
-        console.log(
-          "[mailingWorker] Database connection unavailable, retrying in next cycle...",
-        );
+        console.log("[mailingWorker] Database connection unavailable, retrying in next cycle...");
       } else {
         console.error("[mailingWorker] tick failed", error);
       }

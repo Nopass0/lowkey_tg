@@ -1,6 +1,7 @@
 import { Context, Markup } from "telegraf";
 import { prisma } from "../utils/prisma";
 import { getMainMenu } from "../utils/bot";
+import { resolveMailingActionStart } from "../utils/mailings";
 
 export async function handleStart(ctx: Context) {
   console.log(`[handleStart] User: ${ctx.from?.id}`);
@@ -16,6 +17,31 @@ export async function handleStart(ctx: Context) {
     let referrerId: string | null = null;
 
     if (startPayload) {
+      if (startPayload.startsWith("ml_")) {
+        const token = startPayload.slice(3);
+        const actionResult = await resolveMailingActionStart(token, BigInt(telegramId));
+        if (!actionResult) {
+          await ctx.reply("Ссылка из рассылки устарела или не найдена.");
+          return;
+        }
+
+        const buttonText =
+          actionResult.action.actionType === "link_card"
+            ? "Привязать карту"
+            : actionResult.action.actionType === "billing"
+              ? "Открыть биллинг"
+              : actionResult.action.actionType === "promo_subscribe"
+                ? "Оформить акционную подписку"
+                : "Открыть ссылку";
+
+        await ctx.reply("Подготовил ссылку по кнопке из рассылки.", {
+          reply_markup: Markup.inlineKeyboard([
+            [Markup.button.url(buttonText, actionResult.url)],
+          ]).reply_markup,
+        });
+        return;
+      }
+
       const refCode = startPayload.replace(/^ref_/, "");
       // Search for both the plain code and the one with ref_ prefix
       const referrer = await prisma.user.findFirst({

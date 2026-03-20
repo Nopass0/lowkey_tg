@@ -8,9 +8,11 @@ import { parseTicketMessage, serializeTicketMessage } from "../utils/support";
 import { MAILING_STATUS, SUPPORT_STATUS } from "../utils/constants";
 import { describePromoConditions, describePromoEffects } from "../utils/promo";
 import {
+  buildPromoMailingButtonFromPlan,
   buildMailingMessageContent,
   describeMailingButton,
   describeMailingTarget,
+  getMailingActionStats,
   getMailingDraft,
   getMailingEditorText,
   getMailingPreviewText,
@@ -54,10 +56,32 @@ function getBroadcastTargetKeyboard() {
 function getBroadcastButtonKeyboard() {
   return Markup.inlineKeyboard([
     [Markup.button.callback("Привязать карту", "admin_broadcast_button:link_card")],
+    [Markup.button.callback("Акционная подписка", "admin_broadcast_button:promo")],
     [Markup.button.callback("Открыть биллинг", "admin_broadcast_button:billing")],
     [Markup.button.callback("Своя ссылка", "admin_broadcast_button:custom")],
     [Markup.button.callback("Без кнопки", "admin_broadcast_button:none")],
     [Markup.button.callback("Назад", "admin_broadcast_edit:back")],
+  ]).reply_markup;
+}
+
+async function getBroadcastPromoPlanKeyboard() {
+  const plans = await prisma.subscriptionPlan.findMany({
+    where: {
+      isActive: true,
+      promoActive: true,
+      promoPrice: { not: null },
+    },
+    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+  });
+
+  return Markup.inlineKeyboard([
+    ...plans.map((plan) => [
+      Markup.button.callback(
+        `${plan.name} · ${plan.promoPrice} ₽`,
+        `admin_broadcast_button:promo:${plan.slug}`,
+      ),
+    ]),
+    [Markup.button.callback("Назад", "admin_broadcast_edit:button")],
   ]).reply_markup;
 }
 
@@ -397,7 +421,7 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
   }
 
   if (broadcastEditableState && data.startsWith("admin_broadcast_button:")) {
-    const action = data.split(":")[1];
+    const [, , action, actionValue] = data.split(":");
     const draft = getMailingDraft(state.payload);
 
     if (action === "none") {
@@ -408,6 +432,36 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
         data: { botState: encodeBotState("admin_broadcast_builder", draft as unknown as Record<string, unknown>) },
       });
       await showBroadcastBuilder(ctx, draft as unknown as Record<string, unknown>);
+      return;
+    }
+
+    if (action === "promo" && !actionValue) {
+      await editOrReply(ctx, "Выберите акционный тариф для кнопки.", {
+        reply_markup: await getBroadcastPromoPlanKeyboard(),
+      });
+      return;
+    }
+
+    if (action === "promo" && actionValue) {
+      const promoButton = await buildPromoMailingButtonFromPlan(actionValue);
+      if (!promoButton) {
+        await ctx.answerCbQuery("Акционный тариф не найден.");
+        return;
+      }
+
+      draft.buttonText = promoButton.buttonText;
+      draft.buttonUrl = promoButton.buttonUrl;
+      await prisma.user.update({
+        where: { id: admin.id },
+        data: {
+          botState: encodeBotState(
+            "admin_broadcast_builder",
+            draft as unknown as Record<string, unknown>,
+          ),
+        },
+      });
+      await showBroadcastBuilder(ctx, draft as unknown as Record<string, unknown>);
+      await ctx.reply(`Кнопка настроена: ${promoButton.summary}`);
       return;
     }
 
@@ -603,6 +657,7 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
       await ctx.answerCbQuery("Рассылка не найдена.");
       return;
     }
+    const actionStats = await getMailingActionStats(mailing.id);
 
     await editOrReply(
       ctx,
@@ -610,7 +665,9 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
         `<b>Статус:</b> ${escapeHtml(mailing.status)}\n` +
         `<b>Время:</b> ${escapeHtml(mailing.scheduledAt.toLocaleString("ru-RU"))}\n` +
         `<b>Получатели:</b> ${escapeHtml(describeMailingTarget(mailing.targetType))}\n` +
-        `<b>Кнопка:</b> ${escapeHtml(describeMailingButton(mailing.buttonText, mailing.buttonUrl))}\n\n` +
+        `<b>Кнопка:</b> ${escapeHtml(describeMailingButton(mailing.buttonText, mailing.buttonUrl))}\n` +
+        `<b>Клики:</b> ${actionStats.totalClicks} (${actionStats.uniqueClicks} уник.)\n` +
+        `<b>Переходы:</b> ${actionStats.totalCompletes} (${actionStats.uniqueCompletes} уник.)\n\n` +
         `${escapeHtml(parseMailingDirectives(mailing.message).text || "Без текста")}`,
       {
         parse_mode: "HTML",

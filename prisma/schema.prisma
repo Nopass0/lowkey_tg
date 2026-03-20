@@ -43,6 +43,7 @@ model User {
   subscription              Subscription?
   supportTickets            SupportTicket[]
   telegram_mailings         telegram_mailings[]
+  telegram_mailing_actions  telegram_mailing_actions[]
   transactions              Transaction[]
   referredBy                User?                 @relation("Referrals", fields: [referredById], references: [id])
   referrals                 User[]                @relation("Referrals")
@@ -439,7 +440,31 @@ model telegram_mailings {
   updatedAt       DateTime
   createdById     String?
   users           User?     @relation(fields: [createdById], references: [id])
+  actions         telegram_mailing_actions[]
 
   @@index([createdById, createdAt])
   @@index([status, scheduledAt])
+}
+
+model telegram_mailing_actions {
+  id              String             @id @default(uuid())
+  mailingId       String
+  userId          String
+  token           String             @unique
+  actionType      String
+  actionValue     String?
+  clickCount      Int                @default(0)
+  completeCount   Int                @default(0)
+  firstClickedAt  DateTime?
+  lastClickedAt   DateTime?
+  firstCompletedAt DateTime?
+  lastCompletedAt DateTime?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  mailing         telegram_mailings  @relation(fields: [mailingId], references: [id], onDelete: Cascade)
+  user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([mailingId, userId])
+  @@index([mailingId, firstClickedAt])
+  @@index([userId, createdAt])
 }
