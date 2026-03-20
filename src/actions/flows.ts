@@ -722,27 +722,27 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
       data: { botState: encodeBotState("admin_broadcast_confirm", payload) },
     });
     await ctx.reply(
-      `рџ“ў <b>РџСЂРµРґРїСЂРѕСЃРјРѕС‚СЂ СЂР°СЃСЃС‹Р»РєРё</b>\n\n` +
-        `<b>РўРµРјР°:</b> ${escapeHtml(String(payload.title || ""))}\n` +
-        `<b>РџРѕР»СѓС‡Р°С‚РµР»Рё:</b> ${
+      `📨 <b>Предпросмотр рассылки</b>\n\n` +
+        `<b>Тема:</b> ${escapeHtml(String(payload.title || ""))}\n` +
+        `<b>Получатели:</b> ${
           payload.targetType === "user"
             ? escapeHtml(String(payload.targetLogin || ""))
             : escapeHtml(describeMailingTarget(String(payload.targetType || "all")))
         }\n` +
-        `<b>РљРЅРѕРїРєР°:</b> ${escapeHtml(
+        `<b>Кнопка:</b> ${escapeHtml(
           describeMailingButton(
             payload.buttonText == null ? null : String(payload.buttonText),
             payload.buttonUrl == null ? null : String(payload.buttonUrl),
           ),
         )}\n` +
-        `<b>Р’СЂРµРјСЏ:</b> СЃРµР№С‡Р°СЃ\n\n` +
+        `<b>Время:</b> сейчас\n\n` +
         `${escapeHtml(String(payload.message || ""))}`,
       {
         parse_mode: "HTML",
         reply_markup: {
           inline_keyboard: [
-            [{ text: "вњ… РџРѕРґС‚РІРµСЂРґРёС‚СЊ", callback_data: "admin_broadcast_confirm" }],
-            [{ text: "вќЊ РћС‚РјРµРЅРёС‚СЊ", callback_data: "admin_broadcast_cancel" }],
+            [{ text: "✅ Подтвердить", callback_data: "admin_broadcast_confirm" }],
+            [{ text: "❌ Отменить", callback_data: "admin_broadcast_cancel" }],
           ],
         },
       },
