@@ -1,4 +1,4 @@
-import { bot } from "./src/utils/bot";
+﻿import { bot } from "./src/utils/bot";
 import { prisma } from "./src/utils/prisma";
 import { handleStart } from "./src/commands/start";
 import { handleTextMessageWithSiteBilling } from "./src/commands/textHandlerSite";
@@ -149,13 +149,13 @@ bot.action(/^admin_broadcast_button:.+$/, handleAdminBroadcastFlow);
 bot.action(/^admin_broadcast_target:.+$/, handleAdminBroadcastFlow);
 bot.action(/^admin_broadcast_schedule:.+$/, handleAdminBroadcastFlow);
 bot.action(/^admin_broadcast_view:.+$/, handleAdminBroadcastFlow);
-bot.action(/^admin_broadcast_clickers:.+$/, handleAdminBroadcastFlow);
+bot.action(/^mcl:.+$/, handleAdminBroadcastFlow);
 bot.action(/^admin_broadcast_delete:.+$/, handleAdminBroadcastFlow);
 bot.action("admin_broadcast_image:remove", handleAdminBroadcastFlow);
 bot.action("admin_broadcast_confirm", handleAdminBroadcastFlow);
 bot.action("admin_broadcast_cancel", handleAdminBroadcastFlow);
 bot.action("admin_broadcast_preview_noop", async (ctx) => {
-  await ctx.answerCbQuery("Это превью");
+  await ctx.answerCbQuery("Р­С‚Рѕ РїСЂРµРІСЊСЋ");
 });
 
 bot.action("how_to_connect", handleHowToConnect);
@@ -171,7 +171,7 @@ bot.action(/^legal_accept_all:(.+)$/, async (ctx) => {
   const userId = (ctx as any).match?.[1];
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) {
-    await ctx.answerCbQuery("Пользователь не найден.");
+    await ctx.answerCbQuery("РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ.");
     return;
   }
 
@@ -183,7 +183,7 @@ bot.action(/^legal_accept_all:(.+)$/, async (ctx) => {
   const finalReferredById = user.referredById || shadowUser?.tempReferrerId || null;
 
   if (user.telegramId && user.telegramId !== BigInt(telegramId)) {
-    await ctx.answerCbQuery("Аккаунт уже привязан к другому Telegram.", {
+    await ctx.answerCbQuery("РђРєРєР°СѓРЅС‚ СѓР¶Рµ РїСЂРёРІСЏР·Р°РЅ Рє РґСЂСѓРіРѕРјСѓ Telegram.", {
       show_alert: true,
     });
     return;
@@ -202,7 +202,7 @@ bot.action(/^legal_accept_all:(.+)$/, async (ctx) => {
     await prisma.user.delete({ where: { id: shadowUser.id } }).catch(() => {});
   }
 
-  await ctx.answerCbQuery("Аккаунт привязан.");
+  await ctx.answerCbQuery("РђРєРєР°СѓРЅС‚ РїСЂРёРІСЏР·Р°РЅ.");
   await handleMenuMain(ctx);
 });
 
@@ -220,7 +220,7 @@ bot.action(/^check_payment_(.+)$/, async (ctx) => {
   });
 
   if (!payment) {
-    await ctx.answerCbQuery("Платёж не найден.", { show_alert: true });
+    await ctx.answerCbQuery("РџР»Р°С‚С‘Р¶ РЅРµ РЅР°Р№РґРµРЅ.", { show_alert: true });
     return;
   }
 
@@ -234,7 +234,7 @@ bot.action(/^check_payment_(.+)$/, async (ctx) => {
 
     const status = firstStatus?.operationStatus || firstStatus?.status;
     if (!status) {
-      await ctx.answerCbQuery("Платёж ещё в обработке.", { show_alert: true });
+      await ctx.answerCbQuery("РџР»Р°С‚С‘Р¶ РµС‰С‘ РІ РѕР±СЂР°Р±РѕС‚РєРµ.", { show_alert: true });
       return;
     }
 
@@ -244,8 +244,8 @@ bot.action(/^check_payment_(.+)$/, async (ctx) => {
         data: { status: "success" },
       });
       await processPaymentSuccess(payment.userId, payment.amount);
-      await ctx.editMessageText(`Платёж на ${payment.amount} ₽ успешно завершён.`);
-      await ctx.answerCbQuery("Оплата подтверждена.");
+      await ctx.editMessageText(`РџР»Р°С‚С‘Р¶ РЅР° ${payment.amount} в‚Ѕ СѓСЃРїРµС€РЅРѕ Р·Р°РІРµСЂС€С‘РЅ.`);
+      await ctx.answerCbQuery("РћРїР»Р°С‚Р° РїРѕРґС‚РІРµСЂР¶РґРµРЅР°.");
       return;
     }
 
@@ -254,15 +254,15 @@ bot.action(/^check_payment_(.+)$/, async (ctx) => {
         where: { id: payment.id },
         data: { status: "failed" },
       });
-      await ctx.editMessageText(`Платёж на ${payment.amount} ₽ отклонён.`);
-      await ctx.answerCbQuery("Оплата отклонена.");
+      await ctx.editMessageText(`РџР»Р°С‚С‘Р¶ РЅР° ${payment.amount} в‚Ѕ РѕС‚РєР»РѕРЅС‘РЅ.`);
+      await ctx.answerCbQuery("РћРїР»Р°С‚Р° РѕС‚РєР»РѕРЅРµРЅР°.");
       return;
     }
 
-    await ctx.answerCbQuery("Платёж ещё в обработке.", { show_alert: true });
+    await ctx.answerCbQuery("РџР»Р°С‚С‘Р¶ РµС‰С‘ РІ РѕР±СЂР°Р±РѕС‚РєРµ.", { show_alert: true });
   } catch (error) {
     console.error("[payment-check] failed", error);
-    await ctx.answerCbQuery("Не удалось проверить оплату.", { show_alert: true });
+    await ctx.answerCbQuery("РќРµ СѓРґР°Р»РѕСЃСЊ РїСЂРѕРІРµСЂРёС‚СЊ РѕРїР»Р°С‚Сѓ.", { show_alert: true });
   }
 });
 
@@ -275,19 +275,19 @@ onPaymentSuccess(async ({ userId, amount, referrerId, commission }) => {
     if (user?.telegramId) {
       await bot.telegram.sendMessage(
         Number(user.telegramId),
-        `✅ Ваш платёж на ${amount} ₽ получен.`,
+        `вњ… Р’Р°С€ РїР»Р°С‚С‘Р¶ РЅР° ${amount} в‚Ѕ РїРѕР»СѓС‡РµРЅ.`,
       ).catch(() => {});
 
       const purchaseResult = await tryCompletePendingSubscriptionPurchase(userId);
       if (purchaseResult?.ok) {
         await bot.telegram.sendMessage(
           Number(user.telegramId),
-          `✅ Подписка "${purchaseResult.plan.name}" автоматически оформлена до ${purchaseResult.newActiveUntil.toLocaleDateString("ru-RU")}.`,
+          `вњ… РџРѕРґРїРёСЃРєР° "${purchaseResult.plan.name}" Р°РІС‚РѕРјР°С‚РёС‡РµСЃРєРё РѕС„РѕСЂРјР»РµРЅР° РґРѕ ${purchaseResult.newActiveUntil.toLocaleDateString("ru-RU")}.`,
         ).catch(() => {});
       } else if (purchaseResult && !purchaseResult.ok && purchaseResult.reason === "insufficient_balance") {
         await bot.telegram.sendMessage(
           Number(user.telegramId),
-          `Платёж зачислен, но для тарифа всё ещё не хватает ${purchaseResult.shortfall ?? 0} ₽.`,
+          `РџР»Р°С‚С‘Р¶ Р·Р°С‡РёСЃР»РµРЅ, РЅРѕ РґР»СЏ С‚Р°СЂРёС„Р° РІСЃС‘ РµС‰С‘ РЅРµ С…РІР°С‚Р°РµС‚ ${purchaseResult.shortfall ?? 0} в‚Ѕ.`,
         ).catch(() => {});
       }
     }
@@ -297,7 +297,7 @@ onPaymentSuccess(async ({ userId, amount, referrerId, commission }) => {
       if (referrer?.telegramId) {
         await bot.telegram.sendMessage(
           Number(referrer.telegramId),
-          `🤝 Начислена реферальная комиссия ${commission.toFixed(2)} ₽.`,
+          `рџ¤ќ РќР°С‡РёСЃР»РµРЅР° СЂРµС„РµСЂР°Р»СЊРЅР°СЏ РєРѕРјРёСЃСЃРёСЏ ${commission.toFixed(2)} в‚Ѕ.`,
         ).catch(() => {});
       }
     }
