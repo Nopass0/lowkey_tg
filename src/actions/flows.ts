@@ -341,6 +341,51 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
     return;
   }
 
+  if (data.startsWith("admin_broadcast_view:")) {
+    const [, mailingId, pageRaw] = data.split(":");
+    const mailing = await prisma.telegram_mailings.findUnique({
+      where: { id: mailingId },
+    });
+    if (!mailing) {
+      await ctx.answerCbQuery("Рассылка не найдена.");
+      return;
+    }
+    const actionStats = await getMailingActionStats(mailing.id);
+
+    await editOrReply(
+      ctx,
+      `📢 <b>${escapeHtml(mailing.title)}</b>\n\n` +
+        `<b>Статус:</b> ${escapeHtml(mailing.status)}\n` +
+        `<b>Время:</b> ${escapeHtml(mailing.scheduledAt.toLocaleString("ru-RU"))}\n` +
+        `<b>Получатели:</b> ${escapeHtml(describeMailingTarget(mailing.targetType))}\n` +
+        `<b>Кнопка:</b> ${escapeHtml(describeMailingButton(mailing.buttonText, mailing.buttonUrl))}\n` +
+        `<b>Клики:</b> ${actionStats.totalClicks} (${actionStats.uniqueClicks} уник.)\n` +
+        `<b>Переходы:</b> ${actionStats.totalCompletes} (${actionStats.uniqueCompletes} уник.)\n\n` +
+        `${escapeHtml(parseMailingDirectives(mailing.message).text || "Без текста")}`,
+      {
+        parse_mode: "HTML",
+        reply_markup: Markup.inlineKeyboard([
+          [Markup.button.callback("Удалить", `admin_broadcast_delete:${mailing.id}:${pageRaw}`)],
+          [Markup.button.callback("◀️ К списку", `admin_broadcasts:${pageRaw}`)],
+        ]).reply_markup,
+      },
+    );
+    return;
+  }
+
+  if (data.startsWith("admin_broadcast_delete:")) {
+    const [, mailingId, pageRaw] = data.split(":");
+    await prisma.telegram_mailings.delete({
+      where: { id: mailingId },
+    }).catch(() => null);
+    await editOrReply(ctx, "Рассылка удалена.", {
+      reply_markup: Markup.inlineKeyboard([
+        [Markup.button.callback("◀️ К списку", `admin_broadcasts:${pageRaw}`)],
+      ]).reply_markup,
+    });
+    return;
+  }
+
   const state = decodeBotState(admin.botState);
   if (!state) return;
   const broadcastEditableState =

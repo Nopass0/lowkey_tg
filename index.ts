@@ -149,6 +149,7 @@ bot.action(/^admin_broadcast_button:.+$/, handleAdminBroadcastFlow);
 bot.action(/^admin_broadcast_target:.+$/, handleAdminBroadcastFlow);
 bot.action(/^admin_broadcast_schedule:.+$/, handleAdminBroadcastFlow);
 bot.action(/^admin_broadcast_view:.+$/, handleAdminBroadcastFlow);
+bot.action(/^admin_broadcast_delete:.+$/, handleAdminBroadcastFlow);
 bot.action("admin_broadcast_image:remove", handleAdminBroadcastFlow);
 bot.action("admin_broadcast_confirm", handleAdminBroadcastFlow);
 bot.action("admin_broadcast_cancel", handleAdminBroadcastFlow);
