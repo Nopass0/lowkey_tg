@@ -8,12 +8,125 @@ import { parseTicketMessage, serializeTicketMessage } from "../utils/support";
 import { MAILING_STATUS, SUPPORT_STATUS } from "../utils/constants";
 import { describePromoConditions, describePromoEffects } from "../utils/promo";
 import {
+  buildMailingMessageContent,
   describeMailingButton,
   describeMailingTarget,
+  getMailingDraft,
+  getMailingEditorText,
+  getMailingPreviewText,
+  parseMailingDirectives,
   processMailing,
 } from "../utils/mailings";
 
 const ADMIN_ID = process.env.TELEGRAM_ADMIN_CHAT_ID?.trim() || "";
+
+function getBroadcastBuilderKeyboard(hasImage: boolean) {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback("Текст", "admin_broadcast_edit:text"),
+      Markup.button.callback("Картинка", "admin_broadcast_edit:image"),
+    ],
+    [
+      Markup.button.callback("Кнопка", "admin_broadcast_edit:button"),
+      Markup.button.callback("Превью", "admin_broadcast_edit:preview"),
+    ],
+    [Markup.button.callback("Получатели", "admin_broadcast_edit:targets")],
+    ...(hasImage
+      ? [[Markup.button.callback("Убрать картинку", "admin_broadcast_image:remove")]]
+      : []),
+    [Markup.button.callback("Отменить", "admin_broadcast_cancel")],
+  ]).reply_markup;
+}
+
+function getBroadcastTargetKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: "👥 Всем", callback_data: "admin_broadcast_target:all" }],
+      [{ text: "👤 Одному пользователю", callback_data: "admin_broadcast_target:user" }],
+      [{ text: "🚫 Без подписки", callback_data: "admin_broadcast_target:no_subscription" }],
+      [{ text: "⏳ Подписка скоро кончится", callback_data: "admin_broadcast_target:expiring" }],
+      [{ text: "💳 Без привязанной карты", callback_data: "admin_broadcast_target:no_card" }],
+      [{ text: "◀️ Назад", callback_data: "admin_broadcast_edit:back" }],
+    ],
+  };
+}
+
+function getBroadcastButtonKeyboard() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("Привязать карту", "admin_broadcast_button:link_card")],
+    [Markup.button.callback("Открыть биллинг", "admin_broadcast_button:billing")],
+    [Markup.button.callback("Своя ссылка", "admin_broadcast_button:custom")],
+    [Markup.button.callback("Без кнопки", "admin_broadcast_button:none")],
+    [Markup.button.callback("Назад", "admin_broadcast_edit:back")],
+  ]).reply_markup;
+}
+
+export async function showBroadcastBuilder(
+  ctx: Context,
+  payload: Record<string, unknown>,
+) {
+  const draft = getMailingDraft(payload);
+  await editOrReply(ctx, getMailingEditorText(draft), {
+    parse_mode: "HTML",
+    reply_markup: getBroadcastBuilderKeyboard(Boolean(draft.imageUrl)),
+  });
+}
+
+async function sendBroadcastContentPreview(
+  ctx: Context,
+  payload: Record<string, unknown>,
+) {
+  const draft = getMailingDraft(payload);
+  const previewText = draft.message || draft.title || "Предпросмотр";
+  const previewMarkup = draft.buttonText
+    ? {
+        inline_keyboard: [[
+          {
+            text: draft.buttonText,
+            callback_data: "admin_broadcast_preview_noop",
+          },
+        ]],
+      }
+    : undefined;
+
+  if (draft.imageUrl) {
+    await ctx.replyWithPhoto(draft.imageUrl, {
+      caption: previewText,
+      parse_mode: "HTML",
+      reply_markup: previewMarkup,
+    });
+    return;
+  }
+
+  await ctx.reply(previewText, {
+    parse_mode: "HTML",
+    reply_markup: previewMarkup,
+  });
+}
+
+export async function sendBroadcastConfirmPreview(
+  ctx: Context,
+  payload: Record<string, unknown>,
+) {
+  const draft = getMailingDraft(payload);
+  await sendBroadcastContentPreview(ctx, payload);
+  await ctx.reply(getMailingPreviewText(draft), {
+    parse_mode: "HTML",
+    reply_markup: Markup.inlineKeyboard([
+      [
+        Markup.button.callback("Текст", "admin_broadcast_edit:text"),
+        Markup.button.callback("Картинка", "admin_broadcast_edit:image"),
+      ],
+      [
+        Markup.button.callback("Кнопка", "admin_broadcast_edit:button"),
+        Markup.button.callback("Получатели", "admin_broadcast_edit:targets"),
+      ],
+      [Markup.button.callback("Время", "admin_broadcast_edit:schedule")],
+      [Markup.button.callback("Подтвердить", "admin_broadcast_confirm")],
+      [Markup.button.callback("Отменить", "admin_broadcast_cancel")],
+    ]).reply_markup,
+  });
+}
 
 /**
  * Handles support-related inline actions for end users.
@@ -206,6 +319,115 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
 
   const state = decodeBotState(admin.botState);
   if (!state) return;
+  const broadcastEditableState =
+    state.key === "admin_broadcast_builder" ||
+    state.key === "admin_broadcast_confirm";
+
+  if (broadcastEditableState && data === "admin_broadcast_edit:back") {
+    await showBroadcastBuilder(ctx, state.payload);
+    return;
+  }
+
+  if (broadcastEditableState && data === "admin_broadcast_edit:text") {
+    await prisma.user.update({
+      where: { id: admin.id },
+      data: { botState: encodeBotState("admin_broadcast_text_input", state.payload) },
+    });
+    await ctx.reply("Введите текст рассылки. Он будет показан как текст сообщения или подпись под картинкой.");
+    return;
+  }
+
+  if (broadcastEditableState && data === "admin_broadcast_edit:image") {
+    await prisma.user.update({
+      where: { id: admin.id },
+      data: { botState: encodeBotState("admin_broadcast_image_input", state.payload) },
+    });
+    await ctx.reply("Отправьте фото в этот чат или пришлите прямую ссылку на изображение.");
+    return;
+  }
+
+  if (broadcastEditableState && data === "admin_broadcast_edit:button") {
+    await editOrReply(ctx, "Выберите действие для кнопки.", {
+      reply_markup: getBroadcastButtonKeyboard(),
+    });
+    return;
+  }
+
+  if (broadcastEditableState && data === "admin_broadcast_edit:preview") {
+    await sendBroadcastContentPreview(ctx, state.payload);
+    return;
+  }
+
+  if (broadcastEditableState && data === "admin_broadcast_edit:targets") {
+    await prisma.user.update({
+      where: { id: admin.id },
+      data: { botState: encodeBotState("admin_broadcast_target", state.payload) },
+    });
+    await ctx.reply("Выберите получателей рассылки.", {
+      reply_markup: getBroadcastTargetKeyboard(),
+    });
+    return;
+  }
+
+  if (state.key === "admin_broadcast_confirm" && data === "admin_broadcast_edit:schedule") {
+    await prisma.user.update({
+      where: { id: admin.id },
+      data: { botState: encodeBotState("admin_broadcast_schedule", state.payload) },
+    });
+    await ctx.reply("Выберите время отправки.", {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "🚀 Отправить сразу", callback_data: "admin_broadcast_schedule:now" }],
+          [{ text: "🕒 Запланировать", callback_data: "admin_broadcast_schedule:later" }],
+        ],
+      },
+    });
+    return;
+  }
+
+  if (broadcastEditableState && data === "admin_broadcast_image:remove") {
+    const draft = getMailingDraft(state.payload);
+    draft.imageUrl = null;
+    await prisma.user.update({
+      where: { id: admin.id },
+      data: { botState: encodeBotState("admin_broadcast_builder", draft as unknown as Record<string, unknown>) },
+    });
+    await showBroadcastBuilder(ctx, draft as unknown as Record<string, unknown>);
+    return;
+  }
+
+  if (broadcastEditableState && data.startsWith("admin_broadcast_button:")) {
+    const action = data.split(":")[1];
+    const draft = getMailingDraft(state.payload);
+
+    if (action === "none") {
+      draft.buttonText = null;
+      draft.buttonUrl = null;
+      await prisma.user.update({
+        where: { id: admin.id },
+        data: { botState: encodeBotState("admin_broadcast_builder", draft as unknown as Record<string, unknown>) },
+      });
+      await showBroadcastBuilder(ctx, draft as unknown as Record<string, unknown>);
+      return;
+    }
+
+    await prisma.user.update({
+      where: { id: admin.id },
+      data: {
+        botState: encodeBotState("admin_broadcast_button_label", {
+          ...draft,
+          pendingButtonUrl:
+            action === "link_card"
+              ? "action:link_card"
+              : action === "billing"
+                ? "action:billing"
+                : "custom",
+        }),
+      },
+    });
+    await ctx.reply("Введите текст кнопки.");
+    return;
+  }
 
   if (data.startsWith("admin_broadcast_target:") && state.key === "admin_broadcast_target") {
     const target = data.split(":")[1];
@@ -214,8 +436,7 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
         where: { id: admin.id },
         data: {
           botState: encodeBotState("admin_broadcast_expiring_days", {
-            title: state.payload.title,
-            message: state.payload.message,
+            ...state.payload,
           }),
         },
       });
@@ -228,8 +449,7 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
         where: { id: admin.id },
         data: {
           botState: encodeBotState("admin_broadcast_schedule", {
-            title: state.payload.title,
-            message: state.payload.message,
+            ...state.payload,
             targetType: target,
             buttonText:
               state.payload.buttonText ??
@@ -254,8 +474,7 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
         where: { id: admin.id },
         data: {
           botState: encodeBotState("admin_broadcast_user", {
-            title: state.payload.title,
-            message: state.payload.message,
+            ...state.payload,
           }),
         },
       });
@@ -341,7 +560,7 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
       data: {
         id: crypto.randomUUID(),
         title: String(payload.title || ""),
-        message: String(payload.message || ""),
+        message: buildMailingMessageContent(getMailingDraft(payload)),
         buttonText:
           payload.buttonText == null ? null : String(payload.buttonText),
         buttonUrl:
@@ -392,7 +611,7 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
         `<b>Время:</b> ${escapeHtml(mailing.scheduledAt.toLocaleString("ru-RU"))}\n` +
         `<b>Получатели:</b> ${escapeHtml(describeMailingTarget(mailing.targetType))}\n` +
         `<b>Кнопка:</b> ${escapeHtml(describeMailingButton(mailing.buttonText, mailing.buttonUrl))}\n\n` +
-        `${escapeHtml(mailing.message)}`,
+        `${escapeHtml(parseMailingDirectives(mailing.message).text || "Без текста")}`,
       {
         parse_mode: "HTML",
         reply_markup: Markup.inlineKeyboard([

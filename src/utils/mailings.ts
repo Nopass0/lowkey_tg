@@ -6,6 +6,96 @@ import { buildBillingPath, createSitePaymentLink, createSiteSessionLink } from "
 let mailingWorkerStarted = false;
 let mailingTickInProgress = false;
 
+export interface MailingDraft {
+  title: string;
+  message: string;
+  imageUrl?: string | null;
+  buttonText?: string | null;
+  buttonUrl?: string | null;
+  targetType?: string;
+  targetUserIds?: string[];
+  targetLogin?: string | null;
+  scheduledAt?: string;
+}
+
+function normalizeString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+export function getMailingDraft(
+  payload: Record<string, unknown> | null | undefined,
+): MailingDraft {
+  return {
+    title: normalizeString(payload?.title),
+    message: normalizeString(payload?.message),
+    imageUrl: normalizeString(payload?.imageUrl) || null,
+    buttonText: normalizeString(payload?.buttonText) || null,
+    buttonUrl: normalizeString(payload?.buttonUrl) || null,
+    targetType: normalizeString(payload?.targetType) || "all",
+    targetUserIds: Array.isArray(payload?.targetUserIds)
+      ? payload.targetUserIds.filter((item): item is string => typeof item === "string")
+      : [],
+    targetLogin: normalizeString(payload?.targetLogin) || null,
+    scheduledAt: normalizeString(payload?.scheduledAt) || undefined,
+  };
+}
+
+export function buildMailingMessageContent(draft: MailingDraft): string {
+  const lines: string[] = [];
+  if (draft.imageUrl) {
+    lines.push(`[image:${draft.imageUrl}]`);
+  }
+  if (draft.message) {
+    lines.push(draft.message);
+  }
+  return lines.join("\n").trim();
+}
+
+function escapeHtmlValue(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+export function getMailingEditorText(draft: MailingDraft): string {
+  const textStatus = draft.message
+    ? `текст задан (${draft.message.length} симв.)`
+    : "текст не задан";
+  const imageStatus = draft.imageUrl ? "картинка добавлена" : "без картинки";
+  const buttonStatus = describeMailingButton(draft.buttonText, draft.buttonUrl);
+
+  return (
+    `📨 <b>Конструктор рассылки</b>\n\n` +
+    `<b>Тема:</b> ${escapeHtmlValue(draft.title || "Без темы")}\n` +
+    `<b>Текст:</b> ${escapeHtmlValue(textStatus)}\n` +
+    `<b>Картинка:</b> ${escapeHtmlValue(imageStatus)}\n` +
+    `<b>Кнопка:</b> ${escapeHtmlValue(buttonStatus)}\n\n` +
+    `Сначала соберите сообщение, потом выберите аудиторию и время отправки.`
+  );
+}
+
+export function getMailingPreviewText(draft: MailingDraft): string {
+  const targetLabel =
+    draft.targetType === "user"
+      ? draft.targetLogin || "selected user"
+      : describeMailingTarget(draft.targetType || "all");
+  const scheduleLabel = draft.scheduledAt
+    ? new Date(draft.scheduledAt).toLocaleString("ru-RU")
+    : "сейчас";
+
+  return (
+    `📢 <b>Предпросмотр рассылки</b>\n\n` +
+    `<b>Тема:</b> ${escapeHtmlValue(draft.title || "Без темы")}\n` +
+    `<b>Получатели:</b> ${escapeHtmlValue(targetLabel)}\n` +
+    `<b>Кнопка:</b> ${escapeHtmlValue(
+      describeMailingButton(draft.buttonText, draft.buttonUrl),
+    )}\n` +
+    `<b>Время:</b> ${escapeHtmlValue(scheduleLabel)}\n\n` +
+    `${escapeHtmlValue(draft.message || "Текст не задан")}`
+  );
+}
+
 function parseMailingDirectives(message: string) {
   let imageUrl: string | null = null;
   let buttonText: string | null = null;

@@ -149,6 +149,9 @@ bot.action(/^admin_broadcast_schedule:.+$/, handleAdminBroadcastFlow);
 bot.action(/^admin_broadcast_view:.+$/, handleAdminBroadcastFlow);
 bot.action("admin_broadcast_confirm", handleAdminBroadcastFlow);
 bot.action("admin_broadcast_cancel", handleAdminBroadcastFlow);
+bot.action("admin_broadcast_preview_noop", async (ctx) => {
+  await ctx.answerCbQuery("Это превью");
+});
 
 bot.action("how_to_connect", handleHowToConnect);
 bot.action("how_to_android", handleHowToAndroid);
@@ -259,6 +262,7 @@ bot.action(/^check_payment_(.+)$/, async (ctx) => {
 });
 
 bot.on("text", handleTextMessageWithSiteBilling);
+bot.on("photo", handleTextMessageWithSiteBilling);
 
 onPaymentSuccess(async ({ userId, amount, referrerId, commission }) => {
   try {

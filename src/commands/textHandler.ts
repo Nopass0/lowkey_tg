@@ -6,12 +6,13 @@ import { bot, getMainMenu } from "../utils/bot";
 import { getSbpClient } from "../utils/sbp";
 import { LEGAL_URLS } from "../utils/constants";
 import { createRecoveryPromo, generatePromoSuffix } from "../actions/admin";
+import { showBroadcastBuilder } from "../actions/flows";
 import { encodeBotState, decodeBotState } from "../utils/state";
 import { escapeHtml } from "../utils/telegram";
 import { asPromoRules, validatePromoConditions } from "../utils/promo";
 import { formatTicketPreview } from "../utils/support";
 import { DEFAULT_REFERRAL_RATE, getEffectiveReferralRate } from "../utils/referrals";
-import { parseMailingDirectives } from "../utils/mailings";
+import { getMailingDraft, parseMailingDirectives } from "../utils/mailings";
 
 const ADMIN_ID = process.env.TELEGRAM_ADMIN_CHAT_ID?.trim() || "";
 
