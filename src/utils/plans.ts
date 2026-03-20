@@ -1,3 +1,5 @@
+import { prisma } from "./prisma";
+
 export const PERIOD_DAYS: Record<string, number> = {
   monthly: 30,
   "3months": 90,
@@ -12,14 +14,21 @@ export const PERIOD_LABELS: Record<string, string> = {
   yearly: "1 год",
 };
 
-export const PERIOD_DISCOUNTS: Record<string, number> = {
-  monthly: 0,
-  "3months": 0.05,
-  "6months": 0.15,
-  yearly: 0.2, // Visual only for UI if we want
+export type PlanView = {
+  id: string;
+  name: string;
+  prices: Record<string, number>;
+  features: string[];
+  isPopular: boolean;
 };
 
-export const PLANS = [
+const FALLBACK_PLANS: Array<{
+  id: string;
+  name: string;
+  prices: Record<string, number>;
+  features: string[];
+  isPopular: boolean;
+}> = [
   {
     id: "starter",
     name: "Начальный",
@@ -69,3 +78,54 @@ export const PLANS = [
     isPopular: false,
   },
 ];
+
+function getFallbackPlans(): PlanView[] {
+  return FALLBACK_PLANS.map((plan) => ({
+    ...plan,
+    prices: { ...plan.prices },
+  }));
+}
+
+export const PLANS = getFallbackPlans();
+
+export async function getAvailablePlans(): Promise<PlanView[]> {
+  try {
+    const plans = await prisma.subscriptionPlan.findMany({
+      where: { isActive: true },
+      include: { prices: true },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+    });
+
+    const mapped = plans
+      .map((plan) => ({
+        id: plan.slug,
+        name: plan.name,
+        features: plan.features,
+        isPopular: plan.isPopular,
+        prices: Object.fromEntries(
+          plan.prices
+            .filter((price) => price.period in PERIOD_DAYS)
+            .map((price) => [price.period, price.price]),
+        ),
+      }))
+      .filter((plan) => Object.keys(plan.prices).length > 0);
+
+    return mapped.length ? mapped : getFallbackPlans();
+  } catch (error) {
+    console.error("[plans] failed to load plans from db, using fallback", error);
+    return getFallbackPlans();
+  }
+}
+
+export async function getPlanById(planId: string): Promise<PlanView | null> {
+  const plans = await getAvailablePlans();
+  return plans.find((plan) => plan.id === planId) ?? null;
+}
+
+export function getPlanMonthlyPrice(plan: PlanView): number {
+  const monthlyPrices = Object.entries(plan.prices)
+    .map(([, price]) => price)
+    .filter((price): price is number => typeof price === "number" && Number.isFinite(price));
+
+  return monthlyPrices.length ? Math.min(...monthlyPrices) : 0;
+}
