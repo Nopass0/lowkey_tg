@@ -421,7 +421,7 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
   }
 
   if (broadcastEditableState && data.startsWith("admin_broadcast_button:")) {
-    const [, , action, actionValue] = data.split(":");
+    const [, action, actionValue] = data.split(":");
     const draft = getMailingDraft(state.payload);
 
     if (action === "none") {
