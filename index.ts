@@ -144,9 +144,12 @@ bot.action(/^admin_wd_(approve|reject)_(.+)$/, handleAdminWithdrawalAction);
 
 bot.action(/^admin_broadcasts(?::\d+)?$/, handleAdminBroadcast);
 bot.action("admin_broadcast_create", handleAdminBroadcastFlow);
+bot.action(/^admin_broadcast_edit:.+$/, handleAdminBroadcastFlow);
+bot.action(/^admin_broadcast_button:.+$/, handleAdminBroadcastFlow);
 bot.action(/^admin_broadcast_target:.+$/, handleAdminBroadcastFlow);
 bot.action(/^admin_broadcast_schedule:.+$/, handleAdminBroadcastFlow);
 bot.action(/^admin_broadcast_view:.+$/, handleAdminBroadcastFlow);
+bot.action("admin_broadcast_image:remove", handleAdminBroadcastFlow);
 bot.action("admin_broadcast_confirm", handleAdminBroadcastFlow);
 bot.action("admin_broadcast_cancel", handleAdminBroadcastFlow);
 bot.action("admin_broadcast_preview_noop", async (ctx) => {

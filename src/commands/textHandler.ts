@@ -271,15 +271,43 @@ async function attachShadowUserToExistingAccount(
  * @param ctx Telegram context.
  */
 export async function handleTextMessage(ctx: Context) {
-  if (!ctx.message || !("text" in ctx.message)) return;
-
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
-
-  const text = ctx.message.text.trim();
   const user = await prisma.user.findUnique({
     where: { telegramId: BigInt(telegramId) },
   });
+  const decodedState = decodeBotState(user?.botState);
+
+  if (
+    ctx.message &&
+    "photo" in ctx.message &&
+    telegramId.toString() === ADMIN_ID &&
+    decodedState?.key === "admin_broadcast_image_input" &&
+    user
+  ) {
+    const largestPhoto = ctx.message.photo[ctx.message.photo.length - 1];
+    const draft = getMailingDraft(decodedState.payload);
+    draft.imageUrl = largestPhoto?.file_id ?? null;
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        botState: encodeBotState(
+          "admin_broadcast_builder",
+          draft as unknown as Record<string, unknown>,
+        ),
+      },
+    });
+    await showBroadcastBuilder(
+      ctx,
+      draft as unknown as Record<string, unknown>,
+    );
+    return;
+  }
+
+  if (!ctx.message || !("text" in ctx.message)) return;
+
+  const text = ctx.message.text.trim();
   const targetUser = await prisma.user.findFirst({
     where: {
       OR: [{ login: text }, { telegramLinkCode: text }],
@@ -417,7 +445,6 @@ export async function handleTextMessage(ctx: Context) {
 
   if (!user) return;
 
-  const decodedState = decodeBotState(user.botState);
   if (decodedState) {
     if (decodedState.key === "promo_enter_code") {
       const message = await activatePromo(user, text);
@@ -453,6 +480,106 @@ export async function handleTextMessage(ctx: Context) {
     }
 
     if (decodedState.key === "admin_reply_ticket_preview") {
+      return;
+    }
+
+    if (decodedState.key === "admin_broadcast_text_input") {
+      const draft = getMailingDraft(decodedState.payload);
+      draft.message = text;
+
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          botState: encodeBotState(
+            "admin_broadcast_builder",
+            draft as unknown as Record<string, unknown>,
+          ),
+        },
+      });
+      await showBroadcastBuilder(
+        ctx,
+        draft as unknown as Record<string, unknown>,
+      );
+      return;
+    }
+
+    if (decodedState.key === "admin_broadcast_image_input") {
+      const draft = getMailingDraft(decodedState.payload);
+      draft.imageUrl = text;
+
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          botState: encodeBotState(
+            "admin_broadcast_builder",
+            draft as unknown as Record<string, unknown>,
+          ),
+        },
+      });
+      await showBroadcastBuilder(
+        ctx,
+        draft as unknown as Record<string, unknown>,
+      );
+      return;
+    }
+
+    if (decodedState.key === "admin_broadcast_button_label") {
+      const payload = decodedState.payload as Record<string, unknown>;
+      const draft = getMailingDraft(payload);
+      draft.buttonText = text;
+      const pendingButtonUrl =
+        typeof payload.pendingButtonUrl === "string"
+          ? payload.pendingButtonUrl
+          : "custom";
+
+      if (pendingButtonUrl === "custom") {
+        await prisma.user.update({
+          where: { id: user.id },
+          data: {
+            botState: encodeBotState("admin_broadcast_button_url", {
+              ...draft,
+              pendingButtonUrl,
+            }),
+          },
+        });
+        await ctx.reply("Введите ссылку для кнопки.");
+        return;
+      }
+
+      draft.buttonUrl = pendingButtonUrl;
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          botState: encodeBotState(
+            "admin_broadcast_builder",
+            draft as unknown as Record<string, unknown>,
+          ),
+        },
+      });
+      await showBroadcastBuilder(
+        ctx,
+        draft as unknown as Record<string, unknown>,
+      );
+      return;
+    }
+
+    if (decodedState.key === "admin_broadcast_button_url") {
+      const draft = getMailingDraft(decodedState.payload);
+      draft.buttonUrl = text;
+
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          botState: encodeBotState(
+            "admin_broadcast_builder",
+            draft as unknown as Record<string, unknown>,
+          ),
+        },
+      });
+      await showBroadcastBuilder(
+        ctx,
+        draft as unknown as Record<string, unknown>,
+      );
       return;
     }
 
@@ -837,13 +964,20 @@ export async function handleTextMessage(ctx: Context) {
     }
 
     if (user.botState === "admin_broadcast_title" && telegramId.toString() === ADMIN_ID) {
+      const draft = getMailingDraft({ title: text });
       await prisma.user.update({
         where: { id: user.id },
         data: {
-          botState: encodeBotState("admin_broadcast_message", { title: text }),
+          botState: encodeBotState(
+            "admin_broadcast_builder",
+            draft as unknown as Record<string, unknown>,
+          ),
         },
       });
-      await ctx.reply("Введите текст рассылки.");
+      await showBroadcastBuilder(
+        ctx,
+        draft as unknown as Record<string, unknown>,
+      );
       return;
     }
 
