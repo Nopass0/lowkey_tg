@@ -5,7 +5,7 @@ import { encodeBotState, decodeBotState } from "../utils/state";
 import { editOrReply, escapeHtml } from "../utils/telegram";
 import { renderUserTicketList } from "./menus";
 import { parseTicketMessage, serializeTicketMessage } from "../utils/support";
-import { MAILING_STATUS, SUPPORT_STATUS } from "../utils/constants";
+import { MAILING_STATUS, PAGINATION, SUPPORT_STATUS } from "../utils/constants";
 import { describePromoConditions, describePromoEffects } from "../utils/promo";
 import {
   buildPromoMailingButtonFromPlan,
@@ -717,8 +717,112 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
       {
         parse_mode: "HTML",
         reply_markup: Markup.inlineKeyboard([
+          [Markup.button.callback("Кликнувшие", `admin_broadcast_clickers:${mailing.id}:0:${pageRaw}`)],
           [Markup.button.callback("◀️ К списку", `admin_broadcasts:${pageRaw}`)],
         ]).reply_markup,
+      },
+    );
+    return;
+  }
+
+  if (data.startsWith("admin_broadcast_clickers:")) {
+    const [, mailingId, clickerPageRaw, listPageRaw] = data.split(":");
+    const clickerPage = Number(clickerPageRaw || "0");
+    const listPage = Number(listPageRaw || "0");
+
+    const mailing = await prisma.telegram_mailings.findUnique({
+      where: { id: mailingId },
+      select: { id: true, title: true },
+    });
+    if (!mailing) {
+      await ctx.answerCbQuery("Рассылка не найдена.");
+      return;
+    }
+
+    const mailingActions = (prisma as any).telegram_mailing_actions;
+    const [clickers, total] = await Promise.all([
+      mailingActions.findMany({
+        where: {
+          mailingId,
+          clickCount: { gt: 0 },
+        },
+        include: {
+          user: {
+            select: {
+              id: true,
+              login: true,
+              balance: true,
+            },
+          },
+        },
+        orderBy: [{ lastClickedAt: "desc" }],
+        skip: clickerPage * PAGINATION.users,
+        take: PAGINATION.users,
+      }),
+      mailingActions.count({
+        where: {
+          mailingId,
+          clickCount: { gt: 0 },
+        },
+      }),
+    ]);
+
+    const totalPages = Math.max(1, Math.ceil(total / PAGINATION.users));
+    const buttons = clickers.map((item: any) => [
+      Markup.button.callback(
+        `${item.user.login} · ${item.clickCount} кл. · ${item.completeCount} пер.`,
+        `admin_user_view_${item.user.id}`,
+      ),
+    ]);
+
+    const pager: ReturnType<typeof Markup.button.callback>[] = [];
+    if (clickerPage > 0) {
+      pager.push(
+        Markup.button.callback(
+          "⬅️ Назад",
+          `admin_broadcast_clickers:${mailingId}:${clickerPage - 1}:${listPage}`,
+        ),
+      );
+    }
+    if (clickerPage + 1 < totalPages) {
+      pager.push(
+        Markup.button.callback(
+          "Вперёд ➡️",
+          `admin_broadcast_clickers:${mailingId}:${clickerPage + 1}:${listPage}`,
+        ),
+      );
+    }
+    if (pager.length) {
+      buttons.push(pager);
+    }
+
+    buttons.push([
+      Markup.button.callback("◀️ К рассылке", `admin_broadcast_view:${mailingId}:${listPage}`),
+    ]);
+
+    const listText = clickers.length
+      ? clickers
+          .map((item: any) => {
+            const lastClicked = item.lastClickedAt
+              ? new Date(item.lastClickedAt).toLocaleString("ru-RU")
+              : "неизвестно";
+            return (
+              `• ${item.user.login}\n` +
+              `Кликов: ${item.clickCount}, переходов: ${item.completeCount}\n` +
+              `Последний клик: ${lastClicked}`
+            );
+          })
+          .join("\n\n")
+      : "Никто пока не нажимал кнопку.";
+
+    await editOrReply(
+      ctx,
+      `👆 <b>Кликнувшие по рассылке "${escapeHtml(mailing.title)}"</b>\n` +
+        `Страница ${clickerPage + 1}/${totalPages}\n\n` +
+        `${escapeHtml(listText)}`,
+      {
+        parse_mode: "HTML",
+        reply_markup: Markup.inlineKeyboard(buttons).reply_markup,
       },
     );
   }
