@@ -11,6 +11,7 @@ import { escapeHtml } from "../utils/telegram";
 import { asPromoRules, validatePromoConditions } from "../utils/promo";
 import { formatTicketPreview } from "../utils/support";
 import { DEFAULT_REFERRAL_RATE, getEffectiveReferralRate } from "../utils/referrals";
+import { parseMailingDirectives } from "../utils/mailings";
 
 const ADMIN_ID = process.env.TELEGRAM_ADMIN_CHAT_ID?.trim() || "";
 
@@ -455,12 +456,15 @@ export async function handleTextMessage(ctx: Context) {
     }
 
     if (decodedState.key === "admin_broadcast_message") {
+      const mailingContent = parseMailingDirectives(text);
       await prisma.user.update({
         where: { id: user.id },
         data: {
           botState: encodeBotState("admin_broadcast_target", {
             title: String(decodedState.payload.title || ""),
-            message: text,
+            message: mailingContent.text || text,
+            buttonText: mailingContent.buttonText,
+            buttonUrl: mailingContent.buttonUrl,
           }),
         },
       });

@@ -232,17 +232,19 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
             message: state.payload.message,
             targetType: target,
             buttonText:
-              target === "no_card"
+              state.payload.buttonText ??
+              (target === "no_card"
                 ? "Привязать карту"
                 : target === "no_subscription"
                   ? "Открыть биллинг"
-                  : null,
+                  : null),
             buttonUrl:
-              target === "no_card"
+              state.payload.buttonUrl ??
+              (target === "no_card"
                 ? "action:link_card"
                 : target === "no_subscription"
                   ? "action:billing"
-                  : null,
+                  : null),
             targetUserIds: [],
           }),
         },

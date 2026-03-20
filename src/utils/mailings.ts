@@ -251,7 +251,7 @@ export async function processMailing(mailingId: string) {
   });
 }
 
-export { describeMailingButton, describeMailingTarget };
+export { describeMailingButton, describeMailingTarget, parseMailingDirectives };
 
 /**
  * Starts a lightweight background polling worker for scheduled mailings.
