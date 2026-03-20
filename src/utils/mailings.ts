@@ -456,7 +456,12 @@ export async function resolveMailingActionStart(token: string, telegramId: bigin
       userId: action.userId,
       action: "promo_subscribe",
       plan: action.actionValue || undefined,
-      fallbackRedirect: "/me/billing?subscribed=1",
+      period: "monthly",
+      fallbackRedirect: buildBillingPath({
+        tab: "plans",
+        subscribed: 1,
+        source: "telegram",
+      }),
     });
   }
 
