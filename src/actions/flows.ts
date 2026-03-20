@@ -506,7 +506,9 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
       where: { id: admin.id },
       data: { botState: encodeBotState("admin_broadcast_text_input", state.payload) },
     });
-    await ctx.reply("Р’РІРµРґРёС‚Рµ С‚РµРєСЃС‚ СЂР°СЃСЃС‹Р»РєРё. РћРЅ Р±СѓРґРµС‚ РїРѕРєР°Р·Р°РЅ РєР°Рє С‚РµРєСЃС‚ СЃРѕРѕР±С‰РµРЅРёСЏ РёР»Рё РїРѕРґРїРёСЃСЊ РїРѕРґ РєР°СЂС‚РёРЅРєРѕР№.");
+    await ctx.reply(
+      "Введите текст рассылки. Он будет показан как текст сообщения или подпись под картинкой.",
+    );
     return;
   }
 
@@ -685,11 +687,11 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
       return;
     }
 
-    await ctx.reply("Р’С‹Р±РµСЂРёС‚Рµ РІСЂРµРјСЏ РѕС‚РїСЂР°РІРєРё.", {
+    await ctx.reply("Выберите время отправки.", {
       reply_markup: {
         inline_keyboard: [
-          [{ text: "рџљЂ РћС‚РїСЂР°РІРёС‚СЊ СЃСЂР°Р·Сѓ", callback_data: "admin_broadcast_schedule:now" }],
-          [{ text: "рџ•’ Р—Р°РїР»Р°РЅРёСЂРѕРІР°С‚СЊ", callback_data: "admin_broadcast_schedule:later" }],
+          [{ text: "🚀 Отправить сразу", callback_data: "admin_broadcast_schedule:now" }],
+          [{ text: "🕒 Запланировать", callback_data: "admin_broadcast_schedule:later" }],
         ],
       },
     });
@@ -705,7 +707,7 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
           botState: encodeBotState("admin_broadcast_schedule_input", state.payload),
         },
       });
-      await ctx.reply("Р’РІРµРґРёС‚Рµ РґР°С‚Сѓ Рё РІСЂРµРјСЏ РІ С„РѕСЂРјР°С‚Рµ `Р”Р”.РњРњ.Р“Р“Р“Р“ Р§Р§:РњРњ`.", {
+      await ctx.reply("Введите дату и время в формате `ДД.ММ.ГГГГ ЧЧ:ММ`.", {
         parse_mode: "Markdown",
       });
       return;
