@@ -10,6 +10,7 @@ import { encodeBotState, decodeBotState } from "../utils/state";
 import { escapeHtml } from "../utils/telegram";
 import { asPromoRules, validatePromoConditions } from "../utils/promo";
 import { formatTicketPreview } from "../utils/support";
+import { DEFAULT_REFERRAL_RATE, getEffectiveReferralRate } from "../utils/referrals";
 
 const ADMIN_ID = process.env.TELEGRAM_ADMIN_CHAT_ID?.trim() || "";
 
@@ -88,6 +89,8 @@ async function activatePromo(user: any, codeText: string): Promise<string> {
   }
 
   let balanceAdded = 0;
+  let appliedDiscountPct = 0;
+  let appliedDiscountFixed = 0;
   const effects = asPromoRules(promo.effects);
 
   for (const effect of effects) {
@@ -98,17 +101,19 @@ async function activatePromo(user: any, codeText: string): Promise<string> {
       });
     }
 
-    if (effect.key === "discount_pct") {
+    if (effect.key === "discount_pct" || effect.key === "plan_discount_pct") {
+      appliedDiscountPct = Number(effect.value);
       await prisma.user.update({
         where: { id: user.id },
-        data: { pendingDiscountPct: Number(effect.value) },
+        data: { pendingDiscountPct: appliedDiscountPct },
       });
     }
 
-    if (effect.key === "discount_fixed") {
+    if (effect.key === "discount_fixed" || effect.key === "plan_discount_fixed") {
+      appliedDiscountFixed = Number(effect.value);
       await prisma.user.update({
         where: { id: user.id },
-        data: { pendingDiscountFixed: Number(effect.value) },
+        data: { pendingDiscountFixed: appliedDiscountFixed },
       });
     }
 
@@ -141,7 +146,8 @@ async function activatePromo(user: any, codeText: string): Promise<string> {
           where: { userId: user.id, status: "success" },
         });
         const totalAmount = pastPayments.reduce((sum, payment) => sum + payment.amount, 0);
-        const totalCommission = totalAmount * referrer.referralRate;
+        const totalCommission =
+          totalAmount * getEffectiveReferralRate(referrer.referralRate);
 
         await prisma.user.update({
           where: { id: user.id },
@@ -166,7 +172,95 @@ async function activatePromo(user: any, codeText: string): Promise<string> {
     return `Промокод ${code} активирован. На баланс зачислено ${balanceAdded} ₽.`;
   }
 
+  if (appliedDiscountPct > 0) {
+    return `Промокод ${code} активирован. Скидка ${appliedDiscountPct}% применена к следующей покупке.`;
+  }
+
+  if (appliedDiscountFixed > 0) {
+    return `Промокод ${code} активирован. Скидка ${appliedDiscountFixed} ₽ применена к следующей покупке.`;
+  }
+
   return `Промокод ${code} активирован.`;
+}
+
+/**
+ * Sends the regular logged-in menu for a confirmed account.
+ *
+ * @param ctx Telegram context.
+ * @param login User login shown in greeting.
+ * @param telegramId Current Telegram id.
+ */
+async function replyWithAuthorizedMenu(
+  ctx: Context,
+  login: string,
+  telegramId: number,
+) {
+  let keyboard = getMainMenu().reply_markup.inline_keyboard;
+  if (telegramId.toString() === ADMIN_ID) {
+    keyboard = [
+      ...keyboard,
+      [{ text: "🛠 Админ-панель", callback_data: "menu_admin" }],
+    ];
+  }
+
+  await ctx.reply(`Вы уже вошли в аккаунт <b>${escapeHtml(login)}</b>.`, {
+    parse_mode: "HTML",
+    reply_markup: {
+      keyboard: [[{ text: "Меню" }]],
+      resize_keyboard: true,
+    },
+  });
+
+  await ctx.reply("Выберите действие:", {
+    reply_markup: { inline_keyboard: keyboard },
+  });
+}
+
+/**
+ * Migrates an active shadow Telegram session into an existing real account.
+ *
+ * The legacy database keeps temporary Telegram sessions as `tg_<id>` users.
+ * When the user enters an existing login, we bind the current Telegram id to
+ * that account and remove the shadow row so the session becomes canonical.
+ *
+ * @param shadowUser Temporary Telegram-only user.
+ * @param targetUser Existing real account selected by login.
+ * @param telegramId Current Telegram id.
+ */
+async function attachShadowUserToExistingAccount(
+  shadowUser: { id: string; tempReferrerId: string | null },
+  targetUser: { id: string; referredById: string | null },
+  telegramId: number,
+) {
+  const referredById =
+    targetUser.referredById ||
+    (shadowUser.tempReferrerId && shadowUser.tempReferrerId !== targetUser.id
+      ? shadowUser.tempReferrerId
+      : null);
+
+  await prisma.$transaction(async (tx) => {
+    await tx.user.update({
+      where: { id: shadowUser.id },
+      data: {
+        telegramId: null,
+        botState: null,
+      },
+    });
+
+    await tx.user.update({
+      where: { id: targetUser.id },
+      data: {
+        telegramId: BigInt(telegramId),
+        telegramLinkCode: null,
+        botState: null,
+        referredById,
+      },
+    });
+
+    await tx.user.delete({
+      where: { id: shadowUser.id },
+    });
+  });
 }
 
 /**
@@ -184,14 +278,29 @@ export async function handleTextMessage(ctx: Context) {
   const user = await prisma.user.findUnique({
     where: { telegramId: BigInt(telegramId) },
   });
+  const targetUser = await prisma.user.findFirst({
+    where: {
+      OR: [{ login: text }, { telegramLinkCode: text }],
+    },
+  });
+
+  if (targetUser?.telegramId === BigInt(telegramId)) {
+    if (user?.login.startsWith("tg_") && user.id !== targetUser.id) {
+      await prisma.user.delete({ where: { id: user.id } }).catch(() => {});
+    }
+
+    if (user?.botState) {
+      await prisma.user.update({
+        where: { id: targetUser.id },
+        data: { botState: null },
+      }).catch(() => {});
+    }
+
+    await replyWithAuthorizedMenu(ctx, targetUser.login, telegramId);
+    return;
+  }
 
   if (!user || user.login.startsWith("tg_")) {
-    const targetUser = await prisma.user.findFirst({
-      where: {
-        OR: [{ login: text }, { telegramLinkCode: text }],
-      },
-    });
-
     if (!targetUser) {
       if (text.length < 3 || text.length > 24) {
         await ctx.reply("Логин должен быть длиной от 3 до 24 символов.");
@@ -224,6 +333,7 @@ export async function handleTextMessage(ctx: Context) {
                 login: text,
                 passwordHash,
                 referralCode,
+                referralRate: getEffectiveReferralRate(shadow.referralRate),
                 referredById,
                 tempReferrerId: null,
               },
@@ -236,6 +346,7 @@ export async function handleTextMessage(ctx: Context) {
               passwordHash,
               referralCode,
               telegramId: BigInt(telegramId),
+              referralRate: DEFAULT_REFERRAL_RATE,
               referredById,
             },
           });
@@ -260,6 +371,26 @@ export async function handleTextMessage(ctx: Context) {
         await ctx.reply("Не удалось завершить регистрацию.");
         return;
       }
+    }
+
+    if (
+      user?.login.startsWith("tg_") &&
+      targetUser.telegramId === null
+    ) {
+      await attachShadowUserToExistingAccount(
+        {
+          id: user.id,
+          tempReferrerId: user.tempReferrerId,
+        },
+        {
+          id: targetUser.id,
+          referredById: targetUser.referredById,
+        },
+        telegramId,
+      );
+
+      await replyWithAuthorizedMenu(ctx, targetUser.login, telegramId);
+      return;
     }
 
     if (!targetUser.telegramId || targetUser.telegramId !== BigInt(telegramId)) {
@@ -334,12 +465,18 @@ export async function handleTextMessage(ctx: Context) {
         },
       });
       await ctx.reply(
-        "Выберите получателей рассылки.",
+        "Выберите получателей рассылки.\n\n" +
+          "Кнопку действия можно задать первой строкой текста:\n" +
+          "[button:Привязать карту|action:link_card]\n" +
+          "[button:Открыть биллинг|action:billing]",
         {
           reply_markup: {
             inline_keyboard: [
               [{ text: "👥 Всем", callback_data: "admin_broadcast_target:all" }],
               [{ text: "👤 Одному пользователю", callback_data: "admin_broadcast_target:user" }],
+              [{ text: "🚫 Без подписки", callback_data: "admin_broadcast_target:no_subscription" }],
+              [{ text: "⏳ Подписка скоро кончится", callback_data: "admin_broadcast_target:expiring" }],
+              [{ text: "💳 Без привязанной карты", callback_data: "admin_broadcast_target:no_card" }],
             ],
           },
         },
@@ -381,6 +518,41 @@ export async function handleTextMessage(ctx: Context) {
       return;
     }
 
+    if (decodedState.key === "admin_broadcast_expiring_days") {
+      const days = Number(text);
+      if (!Number.isInteger(days) || days <= 0 || days > 365) {
+        await ctx.reply("Введите целое число дней от 1 до 365.");
+        return;
+      }
+
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          botState: encodeBotState("admin_broadcast_schedule", {
+            ...decodedState.payload,
+            targetType: `expiring:${days}`,
+            targetDays: days,
+            buttonText: "Открыть биллинг",
+            buttonUrl: "action:billing",
+            targetUserIds: [],
+          }),
+        },
+      });
+      await ctx.reply(
+        "Для этого сегмента по умолчанию будет кнопка `Открыть биллинг`. Выберите время отправки.",
+        {
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "🚀 Отправить сразу", callback_data: "admin_broadcast_schedule:now" }],
+              [{ text: "🕒 Запланировать", callback_data: "admin_broadcast_schedule:later" }],
+            ],
+          },
+        },
+      );
+      return;
+    }
+
     if (decodedState.key === "admin_broadcast_schedule_input") {
       const scheduledAt = parseScheduleDate(text);
       if (!scheduledAt || scheduledAt <= new Date()) {
@@ -402,7 +574,24 @@ export async function handleTextMessage(ctx: Context) {
       await ctx.reply(
         `📢 <b>Предпросмотр рассылки</b>\n\n` +
           `<b>Тема:</b> ${escapeHtml(String(payload.title || ""))}\n` +
-          `<b>Получатели:</b> ${payload.targetType === "user" ? escapeHtml(String(payload.targetLogin || "")) : "все пользователи"}\n` +
+          `<b>Получатели:</b> ${
+            payload.targetType === "user"
+              ? escapeHtml(String(payload.targetLogin || ""))
+              : escapeHtml(
+                  String(payload.targetType || "all")
+                    .replace("no_subscription", "без подписки")
+                    .replace("no_card", "без привязанной карты")
+                    .replace(/^expiring:(\d+)$/, "истекает в течение $1 дн.")
+                    .replace("all", "все пользователи"),
+                )
+          }\n` +
+          `<b>Кнопка:</b> ${escapeHtml(
+            payload.buttonUrl === "action:link_card"
+              ? "Привязать карту"
+              : payload.buttonUrl === "action:billing"
+                ? "Открыть биллинг"
+                : "без кнопки",
+          )}\n` +
           `<b>Время:</b> ${escapeHtml(new Date(String(payload.scheduledAt)).toLocaleString("ru-RU"))}\n\n` +
           `${escapeHtml(String(payload.message || ""))}`,
         {

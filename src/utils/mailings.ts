@@ -1,7 +1,7 @@
 import { MAILING_STATUS } from "./constants";
 import { bot } from "./bot";
 import { prisma } from "./prisma";
-import { createSitePaymentLink } from "./siteLinks";
+import { buildBillingPath, createSitePaymentLink, createSiteSessionLink } from "./siteLinks";
 
 let mailingWorkerStarted = false;
 let mailingTickInProgress = false;
@@ -50,6 +50,129 @@ function parseMailingDirectives(message: string) {
   };
 }
 
+function describeMailingTarget(targetType: string) {
+  if (targetType === "user") return "выбранный пользователь";
+  if (targetType === "no_subscription") return "пользователи без подписки";
+  if (targetType === "no_card") return "пользователи без привязанной карты";
+  if (targetType.startsWith("expiring:")) {
+    const days = Number(targetType.split(":")[1] || "0");
+    return `подписка истекает в течение ${days} дн.`;
+  }
+  return "все пользователи";
+}
+
+function describeMailingButton(buttonText?: string | null, buttonUrl?: string | null) {
+  if (!buttonText || !buttonUrl) return "без кнопки";
+  if (buttonUrl === "action:link_card") return `${buttonText} -> привязать карту`;
+  if (buttonUrl === "action:billing") return `${buttonText} -> открыть биллинг`;
+  return `${buttonText} -> ${buttonUrl}`;
+}
+
+async function resolveMailingUsers(targetType: string, selectedUserIds: string[]) {
+  const baseWhere = { telegramId: { not: null } };
+  const now = new Date();
+
+  if (targetType === "user") {
+    return prisma.user.findMany({
+      where: {
+        ...baseWhere,
+        id: { in: selectedUserIds },
+      },
+    });
+  }
+
+  if (targetType === "no_subscription") {
+    return prisma.user.findMany({
+      where: {
+        ...baseWhere,
+        OR: [
+          { subscription: { is: null } },
+          { subscription: { is: { activeUntil: { lte: now } } } },
+        ],
+      },
+    });
+  }
+
+  if (targetType === "no_card") {
+    return prisma.user.findMany({
+      where: {
+        ...baseWhere,
+        paymentMethods: {
+          none: {
+            allowAutoCharge: true,
+          },
+        },
+      },
+    });
+  }
+
+  if (targetType.startsWith("expiring:")) {
+    const days = Math.max(1, Number(targetType.split(":")[1] || "0"));
+    const threshold = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
+    return prisma.user.findMany({
+      where: {
+        ...baseWhere,
+        subscription: {
+          is: {
+            activeUntil: {
+              gt: now,
+              lte: threshold,
+            },
+          },
+        },
+      },
+    });
+  }
+
+  return prisma.user.findMany({
+    where: baseWhere,
+  });
+}
+
+async function resolveMailingButton(params: {
+  userId: string;
+  buttonText?: string | null;
+  buttonUrl?: string | null;
+  promoPlan?: string | null;
+  promoButtonText?: string | null;
+}) {
+  if (params.promoPlan) {
+    const promoUrl = await createSitePaymentLink({
+      userId: params.userId,
+      action: "promo_subscribe",
+      plan: params.promoPlan,
+      fallbackRedirect: "/me/billing?subscribed=1",
+    });
+    return {
+      text: params.promoButtonText ?? "Оформить по акции",
+      url: promoUrl,
+    };
+  }
+
+  if (!params.buttonText || !params.buttonUrl) {
+    return null;
+  }
+
+  if (params.buttonUrl === "action:link_card") {
+    const url = await createSitePaymentLink({
+      userId: params.userId,
+      action: "link_card",
+      fallbackRedirect: buildBillingPath({ tab: "cards", source: "telegram" }),
+    });
+    return { text: params.buttonText, url };
+  }
+
+  if (params.buttonUrl === "action:billing") {
+    const url = await createSiteSessionLink(
+      params.userId,
+      buildBillingPath({ tab: "plans", source: "telegram" }),
+    );
+    return { text: params.buttonText, url };
+  }
+
+  return { text: params.buttonText, url: params.buttonUrl };
+}
+
 /**
  * Sends a mailing to selected recipients and stores result counters.
  *
@@ -72,17 +195,7 @@ export async function processMailing(mailingId: string) {
     },
   });
 
-  const users =
-    mailing.targetType === "user"
-      ? await prisma.user.findMany({
-          where: {
-            id: { in: mailing.selectedUserIds },
-            telegramId: { not: null },
-          },
-        })
-      : await prisma.user.findMany({
-          where: { telegramId: { not: null } },
-        });
+  const users = await resolveMailingUsers(mailing.targetType, mailing.selectedUserIds);
 
   let sentCount = 0;
   let failedCount = 0;
@@ -91,22 +204,16 @@ export async function processMailing(mailingId: string) {
 
   for (const user of users) {
     try {
-      const promoUrl =
-        content.promoPlan != null
-          ? await createSitePaymentLink({
-              userId: user.id,
-              action: "promo_subscribe",
-              plan: content.promoPlan,
-              fallbackRedirect: "/me/billing?subscribed=1",
-            })
-          : null;
-
-      const inlineButton =
-        content.promoPlan && promoUrl
-          ? [[{ text: content.promoButtonText ?? "Оформить по акции", url: promoUrl }]]
-          : content.buttonText && content.buttonUrl
-            ? [[{ text: content.buttonText, url: content.buttonUrl }]]
-            : undefined;
+      const resolvedButton = await resolveMailingButton({
+        userId: user.id,
+        buttonText: mailing.buttonText ?? content.buttonText,
+        buttonUrl: mailing.buttonUrl ?? content.buttonUrl,
+        promoPlan: content.promoPlan,
+        promoButtonText: content.promoButtonText,
+      });
+      const inlineButton = resolvedButton
+        ? [[{ text: resolvedButton.text, url: resolvedButton.url }]]
+        : undefined;
 
       if (content.imageUrl) {
         await bot.telegram.sendPhoto(Number(user.telegramId), content.imageUrl, {
@@ -143,6 +250,8 @@ export async function processMailing(mailingId: string) {
     },
   });
 }
+
+export { describeMailingButton, describeMailingTarget };
 
 /**
  * Starts a lightweight background polling worker for scheduled mailings.

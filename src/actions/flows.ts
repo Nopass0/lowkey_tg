@@ -7,7 +7,11 @@ import { renderUserTicketList } from "./menus";
 import { parseTicketMessage, serializeTicketMessage } from "../utils/support";
 import { MAILING_STATUS, SUPPORT_STATUS } from "../utils/constants";
 import { describePromoConditions, describePromoEffects } from "../utils/promo";
-import { processMailing } from "../utils/mailings";
+import {
+  describeMailingButton,
+  describeMailingTarget,
+  processMailing,
+} from "../utils/mailings";
 
 const ADMIN_ID = process.env.TELEGRAM_ADMIN_CHAT_ID?.trim() || "";
 
@@ -205,14 +209,40 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
 
   if (data.startsWith("admin_broadcast_target:") && state.key === "admin_broadcast_target") {
     const target = data.split(":")[1];
-    if (target === "all") {
+    if (target === "expiring") {
+      await prisma.user.update({
+        where: { id: admin.id },
+        data: {
+          botState: encodeBotState("admin_broadcast_expiring_days", {
+            title: state.payload.title,
+            message: state.payload.message,
+          }),
+        },
+      });
+      await ctx.reply("Введите количество дней, в течение которых подписка должна истекать.");
+      return;
+    }
+
+    if (target === "all" || target === "no_subscription" || target === "no_card") {
       await prisma.user.update({
         where: { id: admin.id },
         data: {
           botState: encodeBotState("admin_broadcast_schedule", {
             title: state.payload.title,
             message: state.payload.message,
-            targetType: "all",
+            targetType: target,
+            buttonText:
+              target === "no_card"
+                ? "Привязать карту"
+                : target === "no_subscription"
+                  ? "Открыть биллинг"
+                  : null,
+            buttonUrl:
+              target === "no_card"
+                ? "action:link_card"
+                : target === "no_subscription"
+                  ? "action:billing"
+                  : null,
             targetUserIds: [],
           }),
         },
@@ -268,7 +298,17 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
     await ctx.reply(
       `📢 <b>Предпросмотр рассылки</b>\n\n` +
         `<b>Тема:</b> ${escapeHtml(String(payload.title || ""))}\n` +
-        `<b>Получатели:</b> ${payload.targetType === "user" ? escapeHtml(String(payload.targetLogin || "")) : "все пользователи"}\n` +
+        `<b>Получатели:</b> ${
+          payload.targetType === "user"
+            ? escapeHtml(String(payload.targetLogin || ""))
+            : escapeHtml(describeMailingTarget(String(payload.targetType || "all")))
+        }\n` +
+        `<b>Кнопка:</b> ${escapeHtml(
+          describeMailingButton(
+            payload.buttonText == null ? null : String(payload.buttonText),
+            payload.buttonUrl == null ? null : String(payload.buttonUrl),
+          ),
+        )}\n` +
         `<b>Время:</b> сейчас\n\n` +
         `${escapeHtml(String(payload.message || ""))}`,
       {
@@ -300,6 +340,10 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
         id: crypto.randomUUID(),
         title: String(payload.title || ""),
         message: String(payload.message || ""),
+        buttonText:
+          payload.buttonText == null ? null : String(payload.buttonText),
+        buttonUrl:
+          payload.buttonUrl == null ? null : String(payload.buttonUrl),
         targetType: String(payload.targetType || "all"),
         selectedUserIds: Array.isArray(payload.targetUserIds)
           ? (payload.targetUserIds as string[])
@@ -344,7 +388,8 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
       `📢 <b>${escapeHtml(mailing.title)}</b>\n\n` +
         `<b>Статус:</b> ${escapeHtml(mailing.status)}\n` +
         `<b>Время:</b> ${escapeHtml(mailing.scheduledAt.toLocaleString("ru-RU"))}\n` +
-        `<b>Получатели:</b> ${mailing.targetType === "user" ? escapeHtml(mailing.selectedUserIds.join(", ")) : "все"}\n\n` +
+        `<b>Получатели:</b> ${escapeHtml(describeMailingTarget(mailing.targetType))}\n` +
+        `<b>Кнопка:</b> ${escapeHtml(describeMailingButton(mailing.buttonText, mailing.buttonUrl))}\n\n` +
         `${escapeHtml(mailing.message)}`,
       {
         parse_mode: "HTML",
