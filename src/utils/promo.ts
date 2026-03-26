@@ -1,4 +1,20 @@
-import type { PromoActivation, PromoCode, User } from "@prisma/client";
+type PromoActivation = {
+  activatedAt: Date;
+};
+
+type PromoCode = {
+  code: string;
+  conditions: unknown;
+  effects: unknown;
+  maxActivations: number | null;
+  createdAt: Date;
+};
+
+type User = {
+  balance: number;
+  referredById: string | null;
+  joinedAt: Date;
+};
 
 export type PromoRule = {
   key: string;

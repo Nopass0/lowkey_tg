@@ -1,0 +1,14 @@
+{
+  "moduleName": "bot",
+  "paths": {
+    "schema": ".voiddb/schema/app.schema",
+    "types": ".voiddb/generated/voiddb.generated.d.ts",
+    "migrations": ".voiddb/migrations"
+  },
+  "env": {
+    "url": "VOIDDB_URL",
+    "token": "VOIDDB_TOKEN",
+    "username": "VOIDDB_USERNAME",
+    "password": "VOIDDB_PASSWORD"
+  }
+}

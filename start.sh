@@ -13,10 +13,6 @@ fi
 echo "📦 Установка зависимостей..."
 bun install
 
-# Генерация Prisma Client
-echo "💎 Генерация Prisma Client..."
-bunx prisma generate
-
 # Запуск через PM2
 echo "🤖 Запуск бота в PM2..."
 pm2 start index.ts --name "lowkey-vpn-bot" --interpreter bun --watch

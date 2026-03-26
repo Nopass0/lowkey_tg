@@ -35,7 +35,7 @@ export async function handleMenuTariffsWithPromo(ctx: Context) {
     promoPrice: plan.promoPrice,
     promoDurationCount: plan.promoDurationCount,
     promoDurationUnit: plan.promoDurationUnit,
-    prices: Object.fromEntries(plan.prices.map((item) => [item.period, item.price])),
+    prices: Object.fromEntries(plan.prices.map((item: any) => [item.period, item.price])),
   }));
 
   const buttons = mapped.map((plan) => [
@@ -52,8 +52,9 @@ export async function handleMenuTariffsWithPromo(ctx: Context) {
     ctx,
     `💎 *Тарифы Lowkey*\n\nВаш баланс: *${user.balance} ₽*\n\n` +
       mapped
-        .map((plan) =>
-          `• *${plan.name}*${plan.promoActive && plan.promoPrice != null ? ` — акция ${plan.promoPrice} ₽ на ${formatPromoDuration(plan.promoDurationCount, plan.promoDurationUnit)}` : ""}`,
+        .map(
+          (plan) =>
+            `• *${plan.name}*${plan.promoActive && plan.promoPrice != null ? ` — акция ${plan.promoPrice} ₽ на ${formatPromoDuration(plan.promoDurationCount, plan.promoDurationUnit)}` : ""}`,
         )
         .join("\n"),
     {
@@ -82,7 +83,7 @@ export async function handleMenuTariffPeriodsWithPromo(ctx: Context) {
     return;
   }
 
-  const priceMap = Object.fromEntries(plan.prices.map((item) => [item.period, item.price]));
+  const priceMap = Object.fromEntries(plan.prices.map((item: any) => [item.period, item.price]));
   const buttons = Object.entries(priceMap)
     .filter(([period]) => period in PERIOD_DAYS && period in PERIOD_LABELS)
     .map(([period, monthlyPrice]) => {
@@ -120,10 +121,11 @@ export async function handleMenuTariffPeriodsWithPromo(ctx: Context) {
     plan.promoActive && plan.promoPrice != null
       ? `\n\n🔥 Акция: ${plan.promoPrice} ₽ на ${formatPromoDuration(plan.promoDurationCount, plan.promoDurationUnit)}, далее ${priceMap.monthly ?? 0} ₽/мес`
       : "";
+  const featuresText = (plan.features as any[]).map((item) => `• ${item}`).join("\n");
 
   await editOrReply(
     ctx,
-    `💎 *${plan.name}*\n\n${plan.features.map((item) => `• ${item}`).join("\n")}${promoText}\n\nБаланс: *${user.balance} ₽*`,
+    `💎 *${plan.name}*\n\n${featuresText}${promoText}\n\nБаланс: *${user.balance} ₽*`,
     {
       parse_mode: "Markdown",
       reply_markup: Markup.inlineKeyboard(buttons).reply_markup,

@@ -17,7 +17,7 @@ export async function handleMenuProfileWithPayments(ctx: Context) {
   if (!user) return;
 
   const defaultCard =
-    user.paymentMethods.find((item) => item.isDefault) ?? user.paymentMethods[0] ?? null;
+    user.paymentMethods.find((item: any) => item.isDefault) ?? user.paymentMethods[0] ?? null;
   const linkCardUrl = await createSitePaymentLink({
     userId: user.id,
     action: "link_card",
@@ -70,14 +70,14 @@ export async function handleToggleAutoRenewalSmart(ctx: Context) {
 
   const method =
     user.paymentMethods.find(
-      (item) =>
+      (item: any) =>
         item.allowAutoCharge !== false &&
         item.id === user.subscription?.autoRenewPaymentMethodId,
     ) ??
     user.paymentMethods.find(
-      (item) => item.allowAutoCharge !== false && item.isDefault,
+      (item: any) => item.allowAutoCharge !== false && item.isDefault,
     ) ??
-    user.paymentMethods.find((item) => item.allowAutoCharge !== false);
+    user.paymentMethods.find((item: any) => item.allowAutoCharge !== false);
 
   if (!method) {
     const linkCardUrl = await createSitePaymentLink({
@@ -121,7 +121,7 @@ export async function handleMenuCards(ctx: Context) {
     fallbackRedirect: buildBillingPath({ tab: "cards", source: "telegram" }),
   });
 
-  const rows = user.paymentMethods.map((card) => [
+  const rows = user.paymentMethods.map((card: any) => [
     Markup.button.callback(
       `${card.isDefault ? "⭐ " : ""}${card.title}${card.allowAutoCharge === false ? " · авто выкл" : ""}`,
       `card_view_${card.id}`,
@@ -248,4 +248,3 @@ export async function handleCardAction(ctx: Context) {
     await handleMenuCards(ctx);
   }
 }
-

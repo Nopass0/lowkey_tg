@@ -104,8 +104,8 @@ export async function getAvailablePlans(): Promise<PlanView[]> {
         isPopular: plan.isPopular,
         prices: Object.fromEntries(
           plan.prices
-            .filter((price) => price.period in PERIOD_DAYS)
-            .map((price) => [price.period, price.price]),
+            .filter((price: any) => price.period in PERIOD_DAYS)
+            .map((price: any) => [price.period, price.price]),
         ),
       }))
       .filter((plan) => Object.keys(plan.prices).length > 0);

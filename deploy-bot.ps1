@@ -13,11 +13,7 @@ if (-Not (Test-Path ".env")) {
 Write-Host "📦 Installing dependencies..." -ForegroundColor Yellow
 bun install
 
-# 3. Generate Prisma client
-Write-Host "💎 Generating Prisma client..." -ForegroundColor Yellow
-bunx prisma generate
-
-# 4. Start with PM2
+# 3. Start with PM2
 Write-Host "🌀 Starting bot via PM2..." -ForegroundColor Yellow
 
 # Check if pm2 is installed

@@ -1,4 +1,4 @@
-﻿import crypto from "node:crypto";
+import crypto from "node:crypto";
 import { Markup, type Context } from "telegraf";
 import { prisma } from "../utils/prisma";
 import { encodeBotState, decodeBotState } from "../utils/state";
@@ -173,7 +173,7 @@ export async function handleSupportAction(ctx: Context) {
       where: { id: user.id },
       data: { botState: "support_create_subject" },
     });
-    await ctx.reply("Р’РІРµРґРёС‚Рµ С‚РµРјСѓ РѕР±СЂР°С‰РµРЅРёСЏ.");
+    await ctx.reply("Введите тему обращения.");
     return;
   }
 
@@ -189,22 +189,22 @@ export async function handleSupportAction(ctx: Context) {
       where: { id: ticketId },
     });
     if (!ticket || ticket.userId !== user.id) {
-      await ctx.answerCbQuery("РўРёРєРµС‚ РЅРµ РЅР°Р№РґРµРЅ.");
+      await ctx.answerCbQuery("Тикет не найден.");
       return;
     }
 
     const parsed = parseTicketMessage(ticket.message);
     await editOrReply(
       ctx,
-      `рџ’¬ *${parsed.subject}*\n\n` +
-        `РЎРѕР·РґР°РЅ: ${ticket.createdAt.toLocaleString("ru-RU")}\n` +
-        `РЎС‚Р°С‚СѓСЃ: ${ticket.status}\n\n` +
+      `💬 *${parsed.subject}*\n\n` +
+        `Создан: ${ticket.createdAt.toLocaleString("ru-RU")}\n` +
+        `Статус: ${ticket.status}\n\n` +
         `${parsed.description}\n\n` +
-        `${ticket.reply ? `РћС‚РІРµС‚ РїРѕРґРґРµСЂР¶РєРё:\n${ticket.reply}` : "РћС‚РІРµС‚Р° РїРѕРєР° РЅРµС‚."}`,
+        `${ticket.reply ? `Ответ поддержки:\n${ticket.reply}` : "Ответа пока нет."}`,
       {
         parse_mode: "Markdown",
         reply_markup: Markup.inlineKeyboard([
-          [Markup.button.callback("в—ЂпёЏ Рљ СЃРїРёСЃРєСѓ", `support_list:${status}:${pageRaw}`)],
+          [Markup.button.callback("◀️ К списку", `support_list:${status}:${pageRaw}`)],
         ]).reply_markup,
       },
     );
@@ -214,7 +214,7 @@ export async function handleSupportAction(ctx: Context) {
   if (data === "support_confirm") {
     const state = decodeBotState(user.botState);
     if (!state || state.key !== "support_create_confirm") {
-      await ctx.answerCbQuery("Р§РµСЂРЅРѕРІРёРє Р·Р°СЏРІРєРё РЅРµ РЅР°Р№РґРµРЅ.");
+      await ctx.answerCbQuery("Черновик заявки не найден.");
       return;
     }
 
@@ -233,10 +233,10 @@ export async function handleSupportAction(ctx: Context) {
       data: { botState: null },
     });
 
-    await editOrReply(ctx, "Р—Р°СЏРІРєР° СЃРѕР·РґР°РЅР°.", {
+    await editOrReply(ctx, "Заявка создана.", {
       reply_markup: Markup.inlineKeyboard([
-        [Markup.button.callback("рџ“‚ РћС‚РєСЂС‹С‚С‹Рµ Р·Р°СЏРІРєРё", "support_list:open:0")],
-        [Markup.button.callback("в—ЂпёЏ Р’ РїРѕРґРґРµСЂР¶РєСѓ", "menu_support")],
+        [Markup.button.callback("📂 Открытые заявки", "support_list:open:0")],
+        [Markup.button.callback("◀️ В поддержку", "menu_support")],
       ]).reply_markup,
     });
     return;
@@ -247,9 +247,9 @@ export async function handleSupportAction(ctx: Context) {
       where: { id: user.id },
       data: { botState: null },
     });
-    await editOrReply(ctx, "РЎРѕР·РґР°РЅРёРµ Р·Р°СЏРІРєРё РѕС‚РјРµРЅРµРЅРѕ.", {
+    await editOrReply(ctx, "Создание заявки отменено.", {
       reply_markup: Markup.inlineKeyboard([
-        [Markup.button.callback("в—ЂпёЏ Р’ РїРѕРґРґРµСЂР¶РєСѓ", "menu_support")],
+        [Markup.button.callback("◀️ В поддержку", "menu_support")],
       ]).reply_markup,
     });
   }
@@ -272,7 +272,7 @@ export async function handleAdminTicketReplyFlow(ctx: Context) {
   const state = decodeBotState(admin.botState);
   const data = (ctx.callbackQuery as any).data as string;
   if (!state || state.key !== "admin_reply_ticket_preview") {
-    await ctx.answerCbQuery("РџСЂРµРґРїСЂРѕСЃРјРѕС‚СЂ РѕС‚РІРµС‚Р° РЅРµ РЅР°Р№РґРµРЅ.");
+    await ctx.answerCbQuery("Предпросмотр ответа не найден.");
     return;
   }
 
@@ -281,7 +281,7 @@ export async function handleAdminTicketReplyFlow(ctx: Context) {
       where: { id: admin.id },
       data: { botState: null },
     });
-    await editOrReply(ctx, "РћС‚РїСЂР°РІРєР° РѕС‚РІРµС‚Р° РѕС‚РјРµРЅРµРЅР°.");
+    await editOrReply(ctx, "Отправка ответа отменена.");
     return;
   }
 
@@ -292,7 +292,7 @@ export async function handleAdminTicketReplyFlow(ctx: Context) {
     include: { user: true },
   });
   if (!ticket) {
-    await ctx.answerCbQuery("РўРёРєРµС‚ РЅРµ РЅР°Р№РґРµРЅ.");
+    await ctx.answerCbQuery("Тикет не найден.");
     return;
   }
 
@@ -308,12 +308,12 @@ export async function handleAdminTicketReplyFlow(ctx: Context) {
   if (ticket.user.telegramId) {
     await ctx.telegram.sendMessage(
       Number(ticket.user.telegramId),
-      `рџ’¬ <b>РћС‚РІРµС‚ РїРѕРґРґРµСЂР¶РєРё</b>\n\n${escapeHtml(message)}`,
+      `💬 <b>Ответ поддержки</b>\n\n${escapeHtml(message)}`,
       { parse_mode: "HTML" },
     );
   }
 
-  await editOrReply(ctx, "РћС‚РІРµС‚ РѕС‚РїСЂР°РІР»РµРЅ РїРѕР»СЊР·РѕРІР°С‚РµР»СЋ.");
+  await editOrReply(ctx, "Ответ отправлен пользователю.");
 }
 
 /**
@@ -755,7 +755,7 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
       where: { id: admin.id },
       data: { botState: null },
     });
-    await editOrReply(ctx, "РЎРѕР·РґР°РЅРёРµ СЂР°СЃСЃС‹Р»РєРё РѕС‚РјРµРЅРµРЅРѕ.");
+    await editOrReply(ctx, "Создание рассылки отменено.");
     return;
   }
 
@@ -788,13 +788,13 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
 
     if (mailing.scheduledAt <= new Date()) {
       await processMailing(mailing.id);
-      await editOrReply(ctx, "Р Р°СЃСЃС‹Р»РєР° РѕС‚РїСЂР°РІР»РµРЅР°.");
+      await editOrReply(ctx, "Рассылка отправлена.");
       return;
     }
 
     await editOrReply(
       ctx,
-      `Р Р°СЃСЃС‹Р»РєР° СЃРѕС…СЂР°РЅРµРЅР°. РћС‚РїСЂР°РІРєР° Р·Р°РїР»Р°РЅРёСЂРѕРІР°РЅР° РЅР° ${mailing.scheduledAt.toLocaleString("ru-RU")}.`,
+      `Рассылка сохранена. Отправка запланирована на ${mailing.scheduledAt.toLocaleString("ru-RU")}.`,
     );
     return;
   }
@@ -805,26 +805,26 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
       where: { id: mailingId },
     });
     if (!mailing) {
-      await ctx.answerCbQuery("Р Р°СЃСЃС‹Р»РєР° РЅРµ РЅР°Р№РґРµРЅР°.");
+      await ctx.answerCbQuery("Рассылка не найдена.");
       return;
     }
     const actionStats = await getMailingActionStats(mailing.id);
 
     await editOrReply(
       ctx,
-      `рџ“ў <b>${escapeHtml(mailing.title)}</b>\n\n` +
-        `<b>РЎС‚Р°С‚СѓСЃ:</b> ${escapeHtml(mailing.status)}\n` +
-        `<b>Р’СЂРµРјСЏ:</b> ${escapeHtml(mailing.scheduledAt.toLocaleString("ru-RU"))}\n` +
-        `<b>РџРѕР»СѓС‡Р°С‚РµР»Рё:</b> ${escapeHtml(describeMailingTarget(mailing.targetType))}\n` +
-        `<b>РљРЅРѕРїРєР°:</b> ${escapeHtml(describeMailingButton(mailing.buttonText, mailing.buttonUrl))}\n` +
-        `<b>РљР»РёРєРё:</b> ${actionStats.totalClicks} (${actionStats.uniqueClicks} СѓРЅРёРє.)\n` +
-        `<b>РџРµСЂРµС…РѕРґС‹:</b> ${actionStats.totalCompletes} (${actionStats.uniqueCompletes} СѓРЅРёРє.)\n\n` +
-        `${escapeHtml(parseMailingDirectives(mailing.message).text || "Р‘РµР· С‚РµРєСЃС‚Р°")}`,
+      `📢 <b>${escapeHtml(mailing.title)}</b>\n\n` +
+        `<b>Статус:</b> ${escapeHtml(mailing.status)}\n` +
+        `<b>Время:</b> ${escapeHtml(mailing.scheduledAt.toLocaleString("ru-RU"))}\n` +
+        `<b>Получатели:</b> ${escapeHtml(describeMailingTarget(mailing.targetType))}\n` +
+        `<b>Кнопка:</b> ${escapeHtml(describeMailingButton(mailing.buttonText, mailing.buttonUrl))}\n` +
+        `<b>Клики:</b> ${actionStats.totalClicks} (${actionStats.uniqueClicks} уник.)\n` +
+        `<b>Переходы:</b> ${actionStats.totalCompletes} (${actionStats.uniqueCompletes} уник.)\n\n` +
+        `${escapeHtml(parseMailingDirectives(mailing.message).text || "Без текста")}`,
       {
         parse_mode: "HTML",
         reply_markup: Markup.inlineKeyboard([
-          [Markup.button.callback("РљР»РёРєРЅСѓРІС€РёРµ", `mcl:${mailing.id}:0:${pageRaw}`)],
-          [Markup.button.callback("в—ЂпёЏ Рљ СЃРїРёСЃРєСѓ", `admin_broadcasts:${pageRaw}`)],
+          [Markup.button.callback("Кликнувшие", `mcl:${mailing.id}:0:${pageRaw}`)],
+          [Markup.button.callback("◀️ К списку", `admin_broadcasts:${pageRaw}`)],
         ]).reply_markup,
       },
     );
@@ -841,7 +841,7 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
       select: { id: true, title: true },
     });
     if (!mailing) {
-      await ctx.answerCbQuery("Р Р°СЃСЃС‹Р»РєР° РЅРµ РЅР°Р№РґРµРЅР°.");
+      await ctx.answerCbQuery("Рассылка не найдена.");
       return;
     }
 
@@ -876,7 +876,7 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
     const totalPages = Math.max(1, Math.ceil(total / PAGINATION.users));
     const buttons = clickers.map((item: any) => [
       Markup.button.callback(
-        `${item.user.login} В· ${item.clickCount} РєР». В· ${item.completeCount} РїРµСЂ.`,
+        `${item.user.login} · ${item.clickCount} кл. · ${item.completeCount} пер.`,
         `admin_user_view_${item.user.id}`,
       ),
     ]);
@@ -885,7 +885,7 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
     if (clickerPage > 0) {
       pager.push(
         Markup.button.callback(
-          "в¬…пёЏ РќР°Р·Р°Рґ",
+          "⬅️ Назад",
           `mcl:${mailingId}:${clickerPage - 1}:${listPage}`,
         ),
       );
@@ -893,7 +893,7 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
     if (clickerPage + 1 < totalPages) {
       pager.push(
         Markup.button.callback(
-          "Р’РїРµСЂС‘Рґ вћЎпёЏ",
+          "Вперёд ➡️",
           `mcl:${mailingId}:${clickerPage + 1}:${listPage}`,
         ),
       );
@@ -903,7 +903,7 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
     }
 
     buttons.push([
-      Markup.button.callback("в—ЂпёЏ Рљ СЂР°СЃСЃС‹Р»РєРµ", `admin_broadcast_view:${mailingId}:${listPage}`),
+      Markup.button.callback("◀️ К рассылке", `admin_broadcast_view:${mailingId}:${listPage}`),
     ]);
 
     const listText = clickers.length
@@ -911,20 +911,20 @@ export async function handleAdminBroadcastFlow(ctx: Context) {
           .map((item: any) => {
             const lastClicked = item.lastClickedAt
               ? new Date(item.lastClickedAt).toLocaleString("ru-RU")
-              : "РЅРµРёР·РІРµСЃС‚РЅРѕ";
+              : "неизвестно";
             return (
-              `вЂў ${item.user.login}\n` +
-              `РљР»РёРєРѕРІ: ${item.clickCount}, РїРµСЂРµС…РѕРґРѕРІ: ${item.completeCount}\n` +
-              `РџРѕСЃР»РµРґРЅРёР№ РєР»РёРє: ${lastClicked}`
+              `• ${item.user.login}\n` +
+              `Кликов: ${item.clickCount}, переходов: ${item.completeCount}\n` +
+              `Последний клик: ${lastClicked}`
             );
           })
           .join("\n\n")
-      : "РќРёРєС‚Рѕ РїРѕРєР° РЅРµ РЅР°Р¶РёРјР°Р» РєРЅРѕРїРєСѓ.";
+      : "Никто пока не нажимал кнопку.";
 
     await editOrReply(
       ctx,
-      `рџ‘† <b>РљР»РёРєРЅСѓРІС€РёРµ РїРѕ СЂР°СЃСЃС‹Р»РєРµ "${escapeHtml(mailing.title)}"</b>\n` +
-        `РЎС‚СЂР°РЅРёС†Р° ${clickerPage + 1}/${totalPages}\n\n` +
+      `👆 <b>Кликнувшие по рассылке "${escapeHtml(mailing.title)}"</b>\n` +
+        `Страница ${clickerPage + 1}/${totalPages}\n\n` +
         `${escapeHtml(listText)}`,
       {
         parse_mode: "HTML",
@@ -953,12 +953,12 @@ export async function handleAdminPromoBuilderAction(ctx: Context) {
   if (!state) return;
 
   if (data === "admin_promo_conditions_menu" && state.key === "admin_promo_create_conditions") {
-    await editOrReply(ctx, "Р’С‹Р±РµСЂРёС‚Рµ С‚РёРї СѓСЃР»РѕРІРёСЏ.", {
+    await editOrReply(ctx, "Выберите тип условия.", {
       reply_markup: Markup.inlineKeyboard([
-        [Markup.button.callback("Р‘Р°Р»Р°РЅСЃ РѕС‚ ...", "admin_promo_condition:min_balance")],
-        [Markup.button.callback("Р‘РµР· РїСЂРёРіР»Р°СЃРёРІС€РµРіРѕ", "admin_promo_condition:must_have_no_referrer")],
-        [Markup.button.callback("РўРѕР»СЊРєРѕ РЅРѕРІС‹Р№ РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ", "admin_promo_condition:new_user_only")],
-        [Markup.button.callback("в—ЂпёЏ РќР°Р·Р°Рґ", "admin_promo_conditions_done")],
+        [Markup.button.callback("Баланс от ...", "admin_promo_condition:min_balance")],
+        [Markup.button.callback("Без пригласившего", "admin_promo_condition:must_have_no_referrer")],
+        [Markup.button.callback("Только новый пользователь", "admin_promo_condition:new_user_only")],
+        [Markup.button.callback("◀️ Назад", "admin_promo_conditions_done")],
       ]).reply_markup,
     });
     return;
@@ -977,10 +977,10 @@ export async function handleAdminPromoBuilderAction(ctx: Context) {
           }),
         },
       });
-      await editOrReply(ctx, "РЈСЃР»РѕРІРёРµ РґРѕР±Р°РІР»РµРЅРѕ.", {
+      await editOrReply(ctx, "Условие добавлено.", {
         reply_markup: Markup.inlineKeyboard([
-          [{ text: "вћ• Р”РѕР±Р°РІРёС‚СЊ СѓСЃР»РѕРІРёРµ", callback_data: "admin_promo_conditions_menu" }],
-          [{ text: "вњ… РџРѕРґС‚РІРµСЂРґРёС‚СЊ СѓСЃР»РѕРІРёСЏ", callback_data: "admin_promo_conditions_done" }],
+          [{ text: "➕ Добавить условие", callback_data: "admin_promo_conditions_menu" }],
+          [{ text: "✅ Подтвердить условия", callback_data: "admin_promo_conditions_done" }],
         ]).reply_markup,
       });
       return;
@@ -995,7 +995,7 @@ export async function handleAdminPromoBuilderAction(ctx: Context) {
         }),
       },
     });
-    await ctx.reply("Р’РІРµРґРёС‚Рµ Р·РЅР°С‡РµРЅРёРµ РґР»СЏ СѓСЃР»РѕРІРёСЏ.");
+    await ctx.reply("Введите значение для условия.");
     return;
   }
 
@@ -1006,21 +1006,21 @@ export async function handleAdminPromoBuilderAction(ctx: Context) {
         botState: encodeBotState("admin_promo_create_effects", state.payload),
       },
     });
-    await editOrReply(ctx, "РўРµРїРµСЂСЊ РґРѕР±Р°РІСЊС‚Рµ СЌС„С„РµРєС‚С‹ РїСЂРѕРјРѕРєРѕРґР°.", {
+    await editOrReply(ctx, "Теперь добавьте эффекты промокода.", {
       reply_markup: Markup.inlineKeyboard([
-        [{ text: "вћ• Р”РѕР±Р°РІРёС‚СЊ СЌС„С„РµРєС‚", callback_data: "admin_promo_effects_menu" }],
+        [{ text: "➕ Добавить эффект", callback_data: "admin_promo_effects_menu" }],
       ]).reply_markup,
     });
     return;
   }
 
   if (data === "admin_promo_effects_menu" && state.key === "admin_promo_create_effects") {
-    await editOrReply(ctx, "Р’С‹Р±РµСЂРёС‚Рµ С‚РёРї СЌС„С„РµРєС‚Р°.", {
+    await editOrReply(ctx, "Выберите тип эффекта.", {
       reply_markup: Markup.inlineKeyboard([
-        [Markup.button.callback("РџРѕРїРѕР»РЅРёС‚СЊ Р±Р°Р»Р°РЅСЃ", "admin_promo_effect:add_balance")],
-        [Markup.button.callback("РЎС‚Р°РІРєР° СЂРµС„РµСЂР°Р»РєРё", "admin_promo_effect:set_referral_rate")],
-        [Markup.button.callback("РЎРєРёРґРєР° %", "admin_promo_effect:discount_pct")],
-        [Markup.button.callback("РЎРєРёРґРєР° в‚Ѕ", "admin_promo_effect:discount_fixed")],
+        [Markup.button.callback("Пополнить баланс", "admin_promo_effect:add_balance")],
+        [Markup.button.callback("Ставка рефералки", "admin_promo_effect:set_referral_rate")],
+        [Markup.button.callback("Скидка %", "admin_promo_effect:discount_pct")],
+        [Markup.button.callback("Скидка ₽", "admin_promo_effect:discount_fixed")],
       ]).reply_markup,
     });
     return;
@@ -1037,7 +1037,7 @@ export async function handleAdminPromoBuilderAction(ctx: Context) {
         }),
       },
     });
-    await ctx.reply("Р’РІРµРґРёС‚Рµ Р·РЅР°С‡РµРЅРёРµ РґР»СЏ СЌС„С„РµРєС‚Р°.");
+    await ctx.reply("Введите значение для эффекта.");
     return;
   }
 
@@ -1058,14 +1058,14 @@ export async function handleAdminPromoBuilderAction(ctx: Context) {
     });
     await editOrReply(
       ctx,
-      `рџЋѓ <b>РџСЂРµРґРїСЂРѕСЃРјРѕС‚СЂ РїСЂРѕРјРѕРєРѕРґР° ${escapeHtml(String(state.payload.code || ""))}</b>\n\n` +
-        `<b>РЈСЃР»РѕРІРёСЏ:</b>\n${conditions.length ? conditions.map((line) => `вЂў ${escapeHtml(line)}`).join("\n") : "вЂў РЅРµС‚"}\n\n` +
-        `<b>Р­С„С„РµРєС‚С‹:</b>\n${effects.length ? effects.map((line) => `вЂў ${escapeHtml(line)}`).join("\n") : "вЂў РЅРµС‚"}`,
+      `🎃 <b>Предпросмотр промокода ${escapeHtml(String(state.payload.code || ""))}</b>\n\n` +
+        `<b>Условия:</b>\n${conditions.length ? conditions.map((line) => `• ${escapeHtml(line)}`).join("\n") : "• нет"}\n\n` +
+        `<b>Эффекты:</b>\n${effects.length ? effects.map((line) => `• ${escapeHtml(line)}`).join("\n") : "• нет"}`,
       {
         parse_mode: "HTML",
         reply_markup: Markup.inlineKeyboard([
-          [Markup.button.callback("вњ… РЎРѕС…СЂР°РЅРёС‚СЊ", "admin_promo_save")],
-          [Markup.button.callback("вќЊ РћС‚РјРµРЅРёС‚СЊ", "admin_promo_cancel")],
+          [Markup.button.callback("✅ Сохранить", "admin_promo_save")],
+          [Markup.button.callback("❌ Отменить", "admin_promo_cancel")],
         ]).reply_markup,
       },
     );
@@ -1077,14 +1077,14 @@ export async function handleAdminPromoBuilderAction(ctx: Context) {
       where: { id: admin.id },
       data: { botState: null },
     });
-    await editOrReply(ctx, "РЎРѕР·РґР°РЅРёРµ РїСЂРѕРјРѕРєРѕРґР° РѕС‚РјРµРЅРµРЅРѕ.");
+    await editOrReply(ctx, "Создание промокода отменено.");
     return;
   }
 
   if (data === "admin_promo_save") {
     const previewState = decodeBotState(admin.botState);
     if (!previewState || previewState.key !== "admin_promo_create_preview") {
-      await ctx.answerCbQuery("Р§РµСЂРЅРѕРІРёРє РЅРµ РЅР°Р№РґРµРЅ.");
+      await ctx.answerCbQuery("Черновик не найден.");
       return;
     }
 
@@ -1104,6 +1104,6 @@ export async function handleAdminPromoBuilderAction(ctx: Context) {
       where: { id: admin.id },
       data: { botState: null },
     });
-    await editOrReply(ctx, "РџСЂРѕРјРѕРєРѕРґ СЃРѕС…СЂР°РЅС‘РЅ.");
+    await editOrReply(ctx, "Промокод сохранён.");
   }
 }

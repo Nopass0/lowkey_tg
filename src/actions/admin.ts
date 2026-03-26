@@ -390,7 +390,7 @@ export async function handleAdminUserPaymentMethods(ctx: Context) {
 
   const listText = user.paymentMethods.length
     ? user.paymentMethods
-        .map((method) => {
+        .map((method: any) => {
           const flags = [
             method.isDefault ? "по умолчанию" : null,
             method.allowAutoCharge ? "автосписание" : "без автосписания",
@@ -653,7 +653,7 @@ export async function handleAdminPromoAction(ctx: Context) {
     const stats =
       promo.activations.length > 0
         ? promo.activations
-            .map((activation) => {
+            .map((activation: any) => {
               return `• ${activation.user.login} · ${activation.activatedAt.toLocaleString("ru-RU")}`;
             })
             .join("\n")
@@ -910,16 +910,16 @@ export async function handleAdminWithdrawalAction(ctx: Context) {
       data: { status: "approved", processedAt: new Date() },
     });
   } else {
-    await prisma.$transaction([
-      prisma.withdrawal.update({
+    await prisma.$transaction(async (tx) => {
+      await tx.withdrawal.update({
         where: { id: withdrawalId },
         data: { status: "rejected", processedAt: new Date() },
-      }),
-      prisma.user.update({
+      });
+      await tx.user.update({
         where: { id: withdrawal.userId },
         data: { referralBalance: { increment: withdrawal.amount } },
-      }),
-    ]);
+      });
+    });
   }
 
   await handleAdminWithdrawals(ctx);

@@ -1,0 +1,412 @@
+datasource db {
+  provider = "voiddb"
+  url      = env("VOIDDB_URL")
+}
+
+generator client {
+  provider = "voiddb-client-js"
+  output   = "../generated"
+}
+
+database {
+  name = "lowkey"
+
+  model LowkeyAiConversations {
+    id String @id @map("_id")
+    userId String
+    title String
+    model String?
+    createdAt DateTime @default(now())
+    updatedAt DateTime
+    @@map("ai_conversations")
+  }
+
+  model LowkeyAiFiles {
+    id String @id @map("_id")
+    userId String
+    conversationId String?
+    messageId String?
+    fileName String
+    mimeType String
+    size Int
+    blobUrl String
+    kind String @default("upload")
+    createdAt DateTime @default(now())
+    @@map("ai_files")
+  }
+
+  model LowkeyAiMessages {
+    id String @id @map("_id")
+    conversationId String
+    role String
+    content String
+    reasoning String?
+    attachments Json?
+    artifacts Json?
+    toolEvents Json?
+    model String?
+    inputTokens Int @default(0)
+    outputTokens Int @default(0)
+    totalTokens Int @default(0)
+    costUsd Float @default(0)
+    createdAt DateTime @default(now())
+    @@map("ai_messages")
+  }
+
+  model LowkeyAiSettings {
+    id String @id @default("global") @map("_id")
+    openRouterApiKey String?
+    defaultModel String @default("qwen3.5:0.8b")
+    localModel String @default("qwen3.5:0.8b")
+    localBaseUrl String @default("http://ollama:11434")
+    freeMonthlyTokens Int @default(500000)
+    aiPlanMonthlyTokens Int @default(10000000)
+    maxPlanMonthlyTokens Int @default(25000000)
+    aiPlanPrice Float @default(490)
+    maxPlanPrice Float @default(890)
+    comboPlanPrice Float @default(1190)
+    tokenPackSize Int @default(5000000)
+    tokenPackPrice Float @default(290)
+    systemPrompt String?
+    maxContextMessages Int @default(14)
+    enableReasoning Boolean @default(true)
+    createdAt DateTime @default(now())
+    updatedAt DateTime
+    hideAiMenuForAll Boolean @default(false)
+    @@map("ai_settings")
+  }
+
+  model LowkeyAiSubscriptions {
+    id String @id @map("_id")
+    userId String
+    tier String
+    title String
+    activeUntil DateTime
+    monthlyTokenLimit Int
+    monthlyTokensUsed Int @default(0)
+    periodStartsAt DateTime @default(now())
+    createdAt DateTime @default(now())
+    updatedAt DateTime
+    @@map("ai_subscriptions")
+  }
+
+  model LowkeyAiUsageEntries {
+    id String @id @map("_id")
+    userId String
+    conversationId String?
+    messageId String?
+    provider String
+    model String
+    inputTokens Int @default(0)
+    outputTokens Int @default(0)
+    totalTokens Int @default(0)
+    costUsd Float @default(0)
+    createdAt DateTime @default(now())
+    @@map("ai_usage_entries")
+  }
+
+  model LowkeyAppReleases {
+    id String @id @map("_id")
+    platform String
+    version String
+    changelog String
+    downloadUrl String
+    fileSizeMb Float
+    downloadCount Int @default(0)
+    isLatest Boolean @default(false)
+    createdAt DateTime @default(now())
+    @@map("app_releases")
+  }
+
+  model LowkeyDevices {
+    id String @id @map("_id")
+    userId String
+    name String
+    os String
+    version String
+    lastIp String
+    isBlocked Boolean @default(false)
+    lastSeenAt DateTime @default(now())
+    @@map("devices")
+  }
+
+  model LowkeyFinanceSettings {
+    id String @id @default("global") @map("_id")
+    taxRate Float @default(0)
+    acquiringFeeRate Float @default(0)
+    createdAt DateTime @default(now())
+    updatedAt DateTime
+    @@map("finance_settings")
+  }
+
+  model LowkeyFinanceWithdrawals {
+    id String @id @map("_id")
+    title String
+    note String?
+    amount Float
+    withdrawalDate DateTime
+    createdAt DateTime @default(now())
+    createdById String?
+    @@map("finance_withdrawals")
+  }
+
+  model LowkeyPaymentMethods {
+    id String @id @map("_id")
+    userId String
+    yokassaMethodId String
+    type String @default("bank_card")
+    title String
+    cardLast4 String?
+    cardBrand String?
+    cardExpMonth Int?
+    cardExpYear Int?
+    isDefault Boolean @default(false)
+    createdAt DateTime @default(now())
+    allowAutoCharge Boolean @default(true)
+    @@map("payment_methods")
+  }
+
+  model LowkeyPayments {
+    id String @id @map("_id")
+    userId String
+    sbpPaymentId String?
+    amount Float
+    status String @default("pending")
+    qrUrl String?
+    sbpUrl String?
+    createdAt DateTime @default(now())
+    expiresAt DateTime @default(now())
+    confirmationUrl String?
+    description String?
+    metadata Json?
+    paymentType String?
+    provider String @default("tochka")
+    yokassaPaymentId String?
+    creditedAt DateTime?
+    isTest Boolean @default(false)
+    refundAmount Float?
+    refundReason String?
+    refundedAt DateTime?
+    @@map("payments")
+  }
+
+  model LowkeyPromoActivations {
+    id String @id @map("_id")
+    userId String
+    promoCodeId String
+    activatedAt DateTime @default(now())
+    @@map("promo_activations")
+  }
+
+  model LowkeyPromoCodes {
+    id String @id @map("_id")
+    code String
+    conditions Json
+    effects Json
+    maxActivations Int?
+    createdAt DateTime @default(now())
+    @@map("promo_codes")
+  }
+
+  model LowkeySubscriptionPlans {
+    id String @id @map("_id")
+    slug String
+    name String
+    features Json[]
+    isPopular Boolean @default(false)
+    isActive Boolean @default(true)
+    sortOrder Int @default(0)
+    createdAt DateTime @default(now())
+    updatedAt DateTime
+    promoActive Boolean @default(false)
+    promoLabel String?
+    promoMaxUses Int?
+    promoPrice Float?
+    promoUsed Int @default(0)
+    promoDurationCount Int? @default(1)
+    promoDurationUnit String? @default("month")
+    @@map("subscription_plans")
+  }
+
+  model LowkeySubscriptionPrices {
+    id String @id @map("_id")
+    planId String
+    period String
+    price Float
+    @@map("subscription_prices")
+  }
+
+  model LowkeySubscriptions {
+    id String @id @map("_id")
+    userId String
+    planId String
+    planName String
+    activeUntil DateTime
+    isLifetime Boolean @default(false)
+    createdAt DateTime @default(now())
+    updatedAt DateTime
+    autoRenewal Boolean @default(true)
+    autoRenewPaymentMethodId String?
+    billingPeriod String @default("monthly")
+    @@map("subscriptions")
+  }
+
+  model LowkeySupportTickets {
+    id String @id @map("_id")
+    userId String
+    message String
+    reply String?
+    status String @default("open")
+    createdAt DateTime @default(now())
+    updatedAt DateTime
+    @@map("support_tickets")
+  }
+
+  model LowkeyTelegramMailingActions {
+    id String @id @map("_id")
+    mailingId String
+    userId String
+    token String
+    actionType String
+    actionValue String?
+    clickCount Int @default(0)
+    completeCount Int @default(0)
+    firstClickedAt DateTime?
+    lastClickedAt DateTime?
+    firstCompletedAt DateTime?
+    lastCompletedAt DateTime?
+    createdAt DateTime @default(now())
+    updatedAt DateTime
+    @@map("telegram_mailing_actions")
+  }
+
+  model LowkeyTelegramMailings {
+    id String @id @map("_id")
+    title String
+    message String
+    buttonText String?
+    buttonUrl String?
+    targetType String
+    selectedUserIds Json[]
+    status String @default("scheduled")
+    scheduledAt DateTime
+    processingAt DateTime?
+    sentAt DateTime?
+    targetCount Int @default(0)
+    sentCount Int @default(0)
+    failedCount Int @default(0)
+    lastError String?
+    createdAt DateTime @default(now())
+    updatedAt DateTime
+    createdById String?
+    @@map("telegram_mailings")
+  }
+
+  model LowkeyTransactions {
+    id String @id @map("_id")
+    userId String
+    type String
+    amount Float
+    title String
+    createdAt DateTime @default(now())
+    isTest Boolean @default(false)
+    paymentId String?
+    @@map("transactions")
+  }
+
+  model LowkeyUsers {
+    id String @id @map("_id")
+    login String
+    passwordHash String
+    balance Float @default(0)
+    referralBalance Float @default(0)
+    isBanned Boolean @default(false)
+    isAdmin Boolean @default(false)
+    referralCode String
+    referredById String?
+    joinedAt DateTime @default(now())
+    pendingDiscountFixed Float @default(0)
+    pendingDiscountPct Float @default(0)
+    botLoginCode String?
+    botLoginCodeExpiresAt DateTime?
+    telegramId BigInt?
+    telegramLinkCode String?
+    telegramLinkCodeExpiresAt DateTime?
+    referralRate Float @default(0.05)
+    botState String?
+    tempReferrerId String?
+    aiFreeTokensUsed Int @default(0)
+    aiPurchasedTokens Int @default(0)
+    hideAiMenu Boolean @default(false)
+    @@map("users")
+  }
+
+  model LowkeyVpnServers {
+    id String @id @map("_id")
+    ip String
+    port Int
+    status String @default("offline")
+    currentLoad Int @default(0)
+    lastSeenAt DateTime @default(now())
+    createdAt DateTime @default(now())
+    serverType String
+    supportedProtocols Json[]
+    location String @default("Unknown, UN")
+    connectLinkTemplate String?
+    @@map("vpn_servers")
+  }
+
+  model LowkeyVpnTokens {
+    id String @id @map("_id")
+    userId String
+    deviceId String
+    token String
+    expiresAt DateTime
+    createdAt DateTime @default(now())
+    @@map("vpn_tokens")
+  }
+
+  model LowkeyWithdrawals {
+    id String @id @map("_id")
+    userId String
+    amount Float
+    target String
+    bank String
+    status String @default("pending")
+    createdAt DateTime @default(now())
+    processedAt DateTime?
+    @@map("withdrawals")
+  }
+
+  model LowkeyYokassaSettings {
+    id String @id @default("global") @map("_id")
+    mode String @default("test")
+    createdAt DateTime @default(now())
+    updatedAt DateTime
+    testSubscriptionEnabled Boolean @default(false)
+    sbpProvider String @default("tochka")
+    @@map("yokassa_settings")
+  }
+}
+
+database {
+  name = "ui_check_remote"
+
+  model profiles {
+    id String @id @map("_id")
+    bio String?
+    rating Float?
+    @@map("profiles")
+  }
+
+  model users {
+    id String @id @map("_id")
+    name String
+    age Float?
+    active Boolean?
+    created_at DateTime?
+    profile_id String? @relation(fields: [profile_id], references: [_id])
+    settings Json?
+    @@map("users")
+  }
+}

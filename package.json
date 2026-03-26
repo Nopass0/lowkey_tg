@@ -14,11 +14,9 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "@prisma/client": "6.5.0",
     "@types/bcryptjs": "^3.0.0",
+    "@voiddb/orm": "^1.2.2",
     "bcryptjs": "^3.0.3",
-    "ioredis": "^5.10.0",
-    "prisma": "6.5.0",
     "telegraf": "^4.16.3",
     "tochka-sbp": "^1.0.0"
   }
