@@ -213,6 +213,8 @@ database {
     slug String
     name String
     features Json[]
+    isTelegramPlan Boolean @default(false)
+    telegramProxyEnabled Boolean @default(false)
     isPopular Boolean @default(false)
     isActive Boolean @default(true)
     sortOrder Int @default(0)
@@ -344,6 +346,7 @@ database {
   model LowkeyVpnServers {
     id String @id @map("_id")
     ip String
+    hostname String?
     port Int
     status String @default("offline")
     currentLoad Int @default(0)
@@ -354,6 +357,54 @@ database {
     location String @default("Unknown, UN")
     connectLinkTemplate String?
     @@map("vpn_servers")
+  }
+
+  model LowkeyMtprotoSettings {
+    id String @id @default("global") @map("_id")
+    enabled Boolean @default(false)
+    port Int @default(443)
+    secret String?
+    channelUsername String?
+    botUsername String?
+    addChannelOnConnect Boolean @default(false)
+    createdAt DateTime @default(now())
+    updatedAt DateTime
+    @@map("mtproto_settings")
+  }
+
+  model LowkeyVpnSessions {
+    id String @id @map("_id")
+    userId String
+    protocol String
+    serverId String?
+    serverIp String?
+    deviceId String?
+    deviceName String?
+    deviceOs String?
+    clientVersion String?
+    vip String?
+    remoteAddr String?
+    status String @default("active")
+    connectedAt DateTime @default(now())
+    lastSeenAt DateTime @default(now())
+    disconnectedAt DateTime?
+    bytesUp Float @default(0)
+    bytesDown Float @default(0)
+    @@map("vpn_sessions")
+  }
+
+  model LowkeyVpnUserProtocolStats {
+    id String @id @map("_id")
+    userId String
+    protocol String
+    sessionCount Int @default(0)
+    activeConnections Int @default(0)
+    totalBytesUp Float @default(0)
+    totalBytesDown Float @default(0)
+    lastSeenAt DateTime @default(now())
+    lastDeviceId String?
+    lastServerId String?
+    @@map("vpn_user_protocol_stats")
   }
 
   model LowkeyVpnTokens {

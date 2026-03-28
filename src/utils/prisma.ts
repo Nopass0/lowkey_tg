@@ -44,6 +44,7 @@ export interface PrismaLikeClient {
   withdrawal: PrismaDelegate;
   supportTicket: PrismaDelegate;
   vpnServer: PrismaDelegate;
+  mtprotoSettings: PrismaDelegate;
   telegram_mailings: PrismaDelegate;
   telegram_mailing_actions: PrismaDelegate;
   $disconnect(): Promise<void>;
@@ -66,6 +67,7 @@ type ModelName =
   | "withdrawal"
   | "supportTicket"
   | "vpnServer"
+  | "mtprotoSettings"
   | "telegram_mailings"
   | "telegram_mailing_actions";
 
@@ -145,8 +147,10 @@ const MODEL_CONFIG: Record<ModelName, ModelConfig> = {
       "slug",
       "name",
       "features",
+      "telegramProxyEnabled",
       "isPopular",
       "isActive",
+      "isTelegramPlan",
       "sortOrder",
       "createdAt",
       "updatedAt",
@@ -283,6 +287,7 @@ const MODEL_CONFIG: Record<ModelName, ModelConfig> = {
     fields: [
       "id",
       "ip",
+      "hostname",
       "port",
       "status",
       "currentLoad",
@@ -294,6 +299,21 @@ const MODEL_CONFIG: Record<ModelName, ModelConfig> = {
       "connectLinkTemplate",
     ],
     dateFields: ["lastSeenAt", "createdAt"],
+  },
+  mtprotoSettings: {
+    collection: "mtproto_settings",
+    fields: [
+      "id",
+      "enabled",
+      "port",
+      "secret",
+      "channelUsername",
+      "botUsername",
+      "addChannelOnConnect",
+      "createdAt",
+      "updatedAt",
+    ],
+    dateFields: ["createdAt", "updatedAt"],
   },
   telegram_mailings: {
     collection: "telegram_mailings",
@@ -1382,6 +1402,7 @@ class VoidPrismaClient implements PrismaLikeClient {
   withdrawal = new VoidPrismaDelegate("withdrawal");
   supportTicket = new VoidPrismaDelegate("supportTicket");
   vpnServer = new VoidPrismaDelegate("vpnServer");
+  mtprotoSettings = new VoidPrismaDelegate("mtprotoSettings");
   telegram_mailings = new VoidPrismaDelegate("telegram_mailings");
   telegram_mailing_actions = new VoidPrismaDelegate("telegram_mailing_actions");
 

@@ -17,6 +17,90 @@ import { calculateDiscountedPrice } from "../utils/subscriptionPurchase";
 
 const ADMIN_ID = process.env.TELEGRAM_ADMIN_CHAT_ID?.trim();
 
+type TelegramProxyPlan = {
+  isTelegramPlan?: boolean | null;
+  telegramProxyEnabled?: boolean | null;
+} | null;
+
+type MtprotoSettings = {
+  enabled?: boolean | null;
+  port?: number | null;
+  secret?: string | null;
+} | null;
+
+function planHasTelegramProxy(plan: TelegramProxyPlan): boolean {
+  return Boolean(plan?.isTelegramPlan || plan?.telegramProxyEnabled);
+}
+
+function buildVlessLink(
+  template: string | null | undefined,
+  userId: string,
+  serverIp: string,
+  serverHost?: string | null,
+): string | null {
+  if (!template) {
+    return null;
+  }
+
+  const serverAddress = serverHost || serverIp;
+  let link = template
+    .replaceAll("{uuid}", userId)
+    .replaceAll("{ip}", serverIp)
+    .replaceAll("{host}", serverAddress);
+
+  if (link.includes("vless://")) {
+    const [baseUrl, tag] = link.split("#");
+    let normalized = baseUrl ?? link;
+    if (!normalized.includes("type=")) {
+      const separator = normalized.includes("?") ? "&" : "?";
+      normalized = `${normalized}${separator}type=tcp`;
+    }
+    if (
+      normalized.includes("security=reality") &&
+      !normalized.includes("flow=")
+    ) {
+      normalized = normalized.replace(
+        "security=reality",
+        "flow=xtls-rprx-vision&security=reality",
+      );
+    }
+    link = `${normalized}${tag ? `#${tag}` : ""}`;
+  }
+
+  return link;
+}
+
+function buildMtprotoProxyLinks(
+  settings: MtprotoSettings,
+  serverIp: string,
+  serverHost?: string | null,
+) {
+  if (!settings?.enabled || !settings.secret) {
+    return null;
+  }
+
+  const host = (serverHost || serverIp).trim();
+  if (!host) {
+    return null;
+  }
+
+  const port =
+    typeof settings.port === "number" && Number.isFinite(settings.port)
+      ? Math.max(1, settings.port)
+      : 443;
+
+  const params = new URLSearchParams({
+    server: host,
+    port: String(port),
+    secret: settings.secret,
+  });
+
+  return {
+    tgLink: `tg://proxy?${params.toString()}`,
+    shareLink: `https://t.me/proxy?${params.toString()}`,
+  };
+}
+
 /**
  * Shows the main inline menu.
  *
@@ -179,10 +263,16 @@ export async function handleMenuVpn(ctx: Context) {
     return;
   }
 
-  const servers = await prisma.vpnServer.findMany({
-    where: { status: "online" },
-    orderBy: { currentLoad: "asc" },
-  });
+  const [servers, currentPlan, mtprotoSettings] = await Promise.all([
+    prisma.vpnServer.findMany({
+      where: { status: "online" },
+      orderBy: { currentLoad: "asc" },
+    }),
+    prisma.subscriptionPlan.findFirst({
+      where: { slug: user.subscription.planId },
+    }),
+    prisma.mtprotoSettings.findFirst({}),
+  ]);
 
   if (!servers.length) {
     await editOrReply(ctx, "Сейчас нет доступных серверов.", {
@@ -195,29 +285,54 @@ export async function handleMenuVpn(ctx: Context) {
 
   const server = servers[0];
   if (!server) return;
+  const vlessLink = buildVlessLink(
+    server.connectLinkTemplate,
+    user.id,
+    server.ip,
+    server.hostname ?? null,
+  );
+  const mtprotoLinks = planHasTelegramProxy(currentPlan)
+    ? buildMtprotoProxyLinks(
+        mtprotoSettings,
+        server.ip,
+        server.hostname ?? null,
+      )
+    : null;
+  const protocols = Array.from(
+    new Set([
+      ...(Array.isArray(server.supportedProtocols) ? server.supportedProtocols : []),
+      ...(mtprotoLinks ? ["mtproto"] : []),
+    ]),
+  );
   let text =
-    `🛡️ *Ваш VPN*\n\nСервер: \`${server.ip}:${server.port}\`\n` +
+    `🛡️ *Ваш VPN*\n\nСервер: \`${(server.hostname || server.ip)}:${server.port}\`\n` +
     `Локация: ${server.location}\n` +
-    `Протоколы: ${server.supportedProtocols.join(", ")}\n`;
+    `Протоколы: ${protocols.join(", ")}\n`;
 
-  if (server.connectLinkTemplate?.includes("vless://")) {
-    const link = server.connectLinkTemplate
-      .replace("{uuid}", user.id)
-      .replace("{ip}", server.ip);
-    text += `\nСсылка:\n\`\`\`text\n${link}\n\`\`\``;
+  if (vlessLink) {
+    text += `\nСсылка VLESS:\n\`\`\`text\n${vlessLink}\n\`\`\``;
   }
+
+  if (mtprotoLinks) {
+    text += `\n\nMTProto proxy:\n\`\`\`text\n${mtprotoLinks.tgLink}\n\`\`\``;
+  }
+
+  const keyboard = [
+    ...(mtprotoLinks?.shareLink
+      ? [[Markup.button.url("Open MTProto", mtprotoLinks.shareLink)]]
+      : []),
+    [
+      Markup.button.callback(
+        "📘 Инструкция по подключению",
+        "how_to_connect",
+      ),
+    ],
+    [Markup.button.callback("◀️ Назад", "menu_main")],
+  ];
 
   await editOrReply(ctx, text, {
     parse_mode: "Markdown",
-    reply_markup: Markup.inlineKeyboard([
-      [
-        Markup.button.callback(
-          "📘 Инструкция по подключению",
-          "how_to_connect",
-        ),
-      ],
-      [Markup.button.callback("◀️ Назад", "menu_main")],
-    ]).reply_markup,
+    reply_markup: Markup.inlineKeyboard(keyboard).reply_markup,
   });
 }
 
