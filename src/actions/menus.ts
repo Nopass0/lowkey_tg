@@ -28,15 +28,18 @@ type MtprotoSettings = {
   secret?: string | null;
 } | null;
 
-function toMtprotoPublicSecret(value?: string | null) {
+function toMtprotoClientSecret(value?: string | null) {
   const secret = value?.trim().toLowerCase();
   if (!secret) {
     return null;
   }
   if (/^(dd|ee)[0-9a-f]{32}$/.test(secret)) {
-    return secret.slice(2);
+    return secret;
   }
-  return /^[0-9a-f]{32}$/.test(secret) ? secret : null;
+  if (/^[0-9a-f]{32}$/.test(secret)) {
+    return `dd${secret}`;
+  }
+  return null;
 }
 
 function planHasTelegramProxy(plan: TelegramProxyPlan): boolean {
@@ -86,7 +89,7 @@ function buildMtprotoProxyLinks(
   serverIp: string,
   serverHost?: string | null,
 ) {
-  const secret = toMtprotoPublicSecret(settings?.secret);
+  const secret = toMtprotoClientSecret(settings?.secret);
   if (!settings?.enabled || !secret) {
     return null;
   }
