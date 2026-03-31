@@ -390,12 +390,37 @@ function getConfig(model: ModelName): ModelConfig {
   return MODEL_CONFIG[model];
 }
 
+function hasVoidDbCredentials() {
+  return Boolean(process.env.VOIDDB_USERNAME && process.env.VOIDDB_PASSWORD);
+}
+
+function isVoidDbAuthError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /invalid or expired token|unauthorized|forbidden|401|403/i.test(message);
+}
+
 async function getClient(): Promise<VoidClient> {
   if (!authPromise) {
     authPromise = (async () => {
-      if (process.env.VOIDDB_USERNAME && process.env.VOIDDB_PASSWORD) {
-        await voidClient.login(process.env.VOIDDB_USERNAME, process.env.VOIDDB_PASSWORD);
+      const token = voidClient.getToken();
+      if (token) {
+        try {
+          await voidClient.listDatabases();
+          return voidClient;
+        } catch (error) {
+          if (!hasVoidDbCredentials() || !isVoidDbAuthError(error)) {
+            throw error;
+          }
+        }
       }
+
+      if (hasVoidDbCredentials()) {
+        await voidClient.login(
+          process.env.VOIDDB_USERNAME!,
+          process.env.VOIDDB_PASSWORD!,
+        );
+      }
+
       return voidClient;
     })().catch((error) => {
       authPromise = null;
