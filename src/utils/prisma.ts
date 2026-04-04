@@ -525,9 +525,24 @@ function toDbData(data: AnyRecord): AnyRecord {
   return out;
 }
 
+function defaultCreateId(model: ModelName): string {
+  switch (model) {
+    case "yokassaSettings":
+    case "mtprotoSettings":
+      return "global";
+    default:
+      return crypto.randomUUID();
+  }
+}
+
 function withCreateDefaults(model: ModelName, data: AnyRecord): AnyRecord {
   const now = new Date();
   const defaults: AnyRecord = {};
+
+  // VoidDB inserts require an explicit document id for these collections.
+  if (data.id === undefined) {
+    defaults.id = defaultCreateId(model);
+  }
 
   switch (model) {
     case "user":
