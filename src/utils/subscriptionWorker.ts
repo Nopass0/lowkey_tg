@@ -135,15 +135,25 @@ async function attemptAutoRenewal(subscription: any) {
   if (user.balance >= totalPrice) {
     const durationMs = durationDays * 24 * 60 * 60 * 1000;
     const newUntil = new Date(subscription.activeUntil.getTime() + durationMs);
+    let renewed = false;
 
     await prisma.$transaction(async (tx) => {
+      const renewalClaim = await tx.subscription.updateMany({
+        where: {
+          id: subscription.id,
+          activeUntil: subscription.activeUntil,
+          autoRenewal: true,
+        },
+        data: { activeUntil: newUntil },
+      });
+
+      if (renewalClaim.count === 0) {
+        return;
+      }
+
       await tx.user.update({
         where: { id: user.id },
         data: { balance: { decrement: totalPrice } },
-      });
-      await tx.subscription.update({
-        where: { id: subscription.id },
-        data: { activeUntil: newUntil },
       });
       await tx.transaction.create({
         data: {
@@ -153,7 +163,13 @@ async function attemptAutoRenewal(subscription: any) {
           title: `Автопродление "${plan.name}"`,
         },
       });
+
+      renewed = true;
     });
+
+    if (!renewed) {
+      return;
+    }
 
     if (telegramChatId) {
       await bot.telegram
