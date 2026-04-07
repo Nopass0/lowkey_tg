@@ -120,7 +120,9 @@ async function attemptAutoRenewal(subscription: any) {
   const user = subscription.user;
   const period = "monthly";
   const plan = await getPlanById(subscription.planId);
-  if (!plan) return;
+  if (!user || !plan) return;
+
+  const telegramChatId = user.telegramId?.toString();
 
   const durationDays = PERIOD_DAYS[period];
   const monthlyPrice = plan.prices[period];
@@ -153,21 +155,25 @@ async function attemptAutoRenewal(subscription: any) {
       });
     });
 
-    await bot.telegram
-      .sendMessage(
-        user.telegramId.toString(),
-        `✅ *Ваша подписка "${plan.name}" продлена на 1 мес.*\n\nСледующее списание: ${newUntil.toLocaleDateString("ru-RU")}`,
-        { parse_mode: "Markdown" },
-      )
-      .catch(() => {});
+    if (telegramChatId) {
+      await bot.telegram
+        .sendMessage(
+          telegramChatId,
+          `✅ *Ваша подписка "${plan.name}" продлена на 1 мес.*\n\nСледующее списание: ${newUntil.toLocaleDateString("ru-RU")}`,
+          { parse_mode: "Markdown" },
+        )
+        .catch(() => {});
+    }
   } else {
-    await bot.telegram
-      .sendMessage(
-        user.telegramId.toString(),
-        `❌ *Автопродление не выполнено*\n\nНа балансе ${user.balance} ₽, а для продления "${plan.name}" нужен ${totalPrice} ₽.`,
-        { parse_mode: "Markdown" },
-      )
-      .catch(() => {});
+    if (telegramChatId) {
+      await bot.telegram
+        .sendMessage(
+          telegramChatId,
+          `❌ *Автопродление не выполнено*\n\nНа балансе ${user.balance} ₽, а для продления "${plan.name}" нужен ${totalPrice} ₽.`,
+          { parse_mode: "Markdown" },
+        )
+        .catch(() => {});
+    }
 
     await prisma.subscription.update({
       where: { id: subscription.id },
