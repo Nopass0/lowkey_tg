@@ -78,6 +78,13 @@ function buildVlessLink(
         "flow=xtls-rprx-vision&security=reality",
       );
     }
+    if (
+      normalized.includes("security=reality") &&
+      !normalized.includes("packetEncoding=")
+    ) {
+      const separator = normalized.includes("?") ? "&" : "?";
+      normalized = `${normalized}${separator}packetEncoding=xudp`;
+    }
     link = `${normalized}${tag ? `#${tag}` : ""}`;
   }
 
