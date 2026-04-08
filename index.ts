@@ -18,6 +18,7 @@ import {
 } from "./src/actions/promoTariffs";
 import {
   handleCardAction,
+  handleGenerateSitePassword,
   handleMenuCards,
   handleMenuProfileWithPayments,
   handleToggleAutoRenewalSmart,
@@ -101,6 +102,7 @@ bot.action("menu_support", handleMenuSupport);
 bot.action("menu_topup", handleMenuTopupViaSite);
 bot.action("toggle_auto_renewal", handleToggleAutoRenewalSmart);
 bot.action("menu_cards", handleMenuCards);
+bot.action("generate_site_password", handleGenerateSitePassword);
 bot.action(/^card_(view|default|auto|remove)_.+$/, handleCardAction);
 bot.action("logout", handleLogout);
 bot.action("menu_withdraw", async (ctx) => {

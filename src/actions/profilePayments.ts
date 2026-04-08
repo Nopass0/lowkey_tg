@@ -1,8 +1,49 @@
+import bcrypt from "bcryptjs";
+import crypto from "node:crypto";
 import { Markup, type Context } from "telegraf";
 import { prisma } from "../utils/prisma";
 import { handleMenuProfile as handleLegacyMenuProfile } from "./menus";
-import { createSitePaymentLink, createSiteSessionLink, buildBillingPath } from "../utils/siteLinks";
+import { createSitePaymentLink, buildBillingPath } from "../utils/siteLinks";
 import { editOrReply } from "../utils/telegram";
+
+/**
+ * Generates a fresh site password for the current Telegram-bound user and
+ * returns it once in chat after storing only the hash in the database.
+ *
+ * @param ctx Telegram context.
+ */
+export async function handleGenerateSitePassword(ctx: Context) {
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  const user = await prisma.user.findUnique({
+    where: { telegramId: BigInt(telegramId) },
+  });
+
+  if (!user) {
+    await ctx.answerCbQuery("Аккаунт не найден.", { show_alert: true });
+    return;
+  }
+
+  const nextPassword = crypto.randomBytes(6).toString("base64url");
+  const passwordHash = await bcrypt.hash(nextPassword, 10);
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { passwordHash },
+  });
+
+  await ctx.answerCbQuery("Новый пароль создан.");
+  await ctx.reply(
+    `🔐 Новый пароль для сайта\n\nЛогин: \`${user.login}\`\nПароль: \`${nextPassword}\`\n\nСтарый пароль больше не действует.`,
+    {
+      parse_mode: "Markdown",
+      reply_markup: Markup.inlineKeyboard([
+        [Markup.button.callback("👤 В профиль", "menu_profile")],
+      ]).reply_markup,
+    },
+  );
+}
 
 export async function handleMenuProfileWithPayments(ctx: Context) {
   await handleLegacyMenuProfile(ctx);
@@ -38,6 +79,7 @@ export async function handleMenuProfileWithPayments(ctx: Context) {
     {
       reply_markup: Markup.inlineKeyboard([
         [Markup.button.callback("💳 Мои карты", "menu_cards")],
+        [Markup.button.callback("🔐 Новый пароль для сайта", "generate_site_password")],
         [Markup.button.url("➕ Привязать карту", linkCardUrl)],
       ]).reply_markup,
     },
