@@ -46,18 +46,40 @@ function planHasTelegramProxy(plan: TelegramProxyPlan): boolean {
   return Boolean(plan?.isTelegramPlan || plan?.telegramProxyEnabled);
 }
 
+/**
+ * Returns a default VLESS template for a server when the heartbeat hasn't
+ * written one to the DB yet.  Mirrors the fallback in `site/backend`. We use
+ * the server IP (not hostname) because some Android resolvers stall on AAAA
+ * lookups for the domain — IP literals dodge that DNS round-trip.
+ */
+function buildDefaultVlessTemplate(
+  serverIp: string,
+  serverHost?: string | null,
+) {
+  const sni = (serverHost ?? serverIp).trim();
+  const port = Number.parseInt(process.env.VPN_DEFAULT_VLESS_PORT ?? "", 10);
+  const p = Number.isFinite(port) && port > 0 ? port : 2443;
+  const host = serverIp.trim() || sni;
+  return `vless://{uuid}@${host}:${p}?encryption=none&security=tls&sni=${sni}&type=tcp#LOWKEY`;
+}
+
 function buildVlessLink(
   template: string | null | undefined,
   userId: string,
   serverIp: string,
   serverHost?: string | null,
 ): string | null {
-  if (!template) {
-    return null;
-  }
+  // Fall back to a sensible default so the bot always shows a link as long as
+  // the server itself is reachable (status=online). Empty template happens
+  // when the running hysteria binary hasn't pushed a `connectLinkTemplate`
+  // value into vpn_servers yet (older binaries or partial heartbeats).
+  const effectiveTemplate =
+    template && template.trim().length > 0
+      ? template
+      : buildDefaultVlessTemplate(serverIp, serverHost ?? null);
 
   const serverAddress = serverHost || serverIp;
-  let link = template
+  let link = effectiveTemplate
     .replaceAll("{uuid}", userId)
     .replaceAll("{ip}", serverIp)
     .replaceAll("{host}", serverAddress);
